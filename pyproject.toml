@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "amd-adrenalin-control"
+version = "0.1.0"
+description = "PyQt6 desktop utility for AMD Adrenalin Control to start, stop, restart, and monitor AMD Adrenalin processes on Windows."
+readme = "README.md"
+license = { text = "GPL-3.0-only" }
+requires-python = ">=3.13"
+dependencies = [
+    "psutil",
+    "PyQt6",
+    "types-psutil",
+]
+
+[project.urls]
+Homepage = "https://github.com/BUZZARDGTA/restart-amd-adrenaline"
+Issues = "https://github.com/BUZZARDGTA/restart-amd-adrenaline/issues"
+
+[project.scripts]
+amd-adrenalin-control = "main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+py-modules = ["main"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.flake8]
+max-line-length = 200
+
+[tool.pylint.master]
+extension-pkg-allow-list = ["PyQt6"]
+
+[tool.pylint.format]
+max-line-length = 200
+
+[tool.ruff]
+line-length = 200
+
+[tool.ruff.lint]
+select = ["ALL"]
