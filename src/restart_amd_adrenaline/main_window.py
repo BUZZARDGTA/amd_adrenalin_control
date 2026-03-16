@@ -114,21 +114,27 @@ class MainWindow(QMainWindow):
 
         restart_btn = QPushButton("Restart Adrenalin", self)
         restart_btn.setMinimumHeight(40)
+        restart_btn.setToolTip("Stops Radeon Software if running, then starts a fresh instance.")
         restart_btn.clicked.connect(self.restart_software)  # pyright: ignore[reportUnknownMemberType]
 
         start_btn = QPushButton("Start Adrenalin", self)
         start_btn.setMinimumHeight(40)
         start_btn.setObjectName("start_btn")
+        start_btn.setToolTip("Starts Radeon Software if it is not already running.")
         start_btn.clicked.connect(self.start_only)  # pyright: ignore[reportUnknownMemberType]
 
         stop_btn = QPushButton("Stop Adrenalin", self)
         stop_btn.setMinimumHeight(40)
         stop_btn.setObjectName("stop_btn")
+        stop_btn.setToolTip("Stops the main Radeon Software process and its child processes.")
         stop_btn.clicked.connect(self.stop_only)  # pyright: ignore[reportUnknownMemberType]
 
-        stop_all_btn = QPushButton("Stop All Adrenalin processes", self)
+        stop_all_btn = QPushButton("Stop all AMD processes", self)
         stop_all_btn.setMinimumHeight(38)
         stop_all_btn.setObjectName("stop_all_btn")
+        stop_all_btn.setToolTip(
+            "Stops Radeon Software and all monitored AMD helper/service processes, including their child processes.",
+        )
         stop_all_btn.clicked.connect(self.stop_all)  # pyright: ignore[reportUnknownMemberType]
 
         layout.addWidget(self.status_label, 0, 0, 1, 3)
