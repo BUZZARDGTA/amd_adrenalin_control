@@ -7,6 +7,8 @@ import sys
 from ctypes import wintypes
 from pathlib import Path
 
+_SHELL_EXECUTE_SUCCESS_MIN = 32
+
 
 def is_running_as_admin() -> bool:
     """Return True when the current process has administrator privileges on Windows."""
@@ -26,10 +28,12 @@ def is_running_as_admin() -> bool:
         if not opened:
             return False
 
-        class TOKEN_ELEVATION(ctypes.Structure):
+        class TokenElevation(ctypes.Structure):  # pylint: disable=too-few-public-methods
+            """Maps to the Windows TOKEN_ELEVATION struct."""
+
             _fields_ = [("TokenIsElevated", wintypes.DWORD)]
 
-        elevation = TOKEN_ELEVATION()
+        elevation = TokenElevation()
         return_length = wintypes.DWORD(0)
         try:
             queried = ctypes.windll.advapi32.GetTokenInformation(
@@ -62,13 +66,13 @@ def request_self_elevation() -> bool:
             "runas",
             executable,
             params,
-            os.getcwd(),
+            str(Path.cwd()),
             1,
         )
     except (OSError, AttributeError):
         return False
 
-    return result > 32
+    return result > _SHELL_EXECUTE_SUCCESS_MIN
 
 
 def _build_elevated_argv() -> list[str]:
