@@ -384,8 +384,11 @@ class MainWindow(QMainWindow):
         """Terminate a single process by PID and refresh the display."""
         failure_reason: str | None = None
         permission_denied = False
+        process_label = f"PID {pid}"
         try:
             proc = psutil.Process(pid)
+            with contextlib.suppress(psutil.Error):
+                process_label = f"{proc.name()} (PID {pid})"
             proc.terminate()
             proc.wait(timeout=3)
         except psutil.AccessDenied:
@@ -409,10 +412,10 @@ class MainWindow(QMainWindow):
         self._refresh_process_info()
 
         if failure_reason is not None:
-            self.status_label.setText(f"Failed to terminate PID {pid}: {failure_reason}")
+            self.status_label.setText(f"Failed to terminate {process_label}: {failure_reason}")
             self._popup(
                 "Terminate failed",
-                f"Could not terminate PID {pid}.\n\nReason: {failure_reason}",
+                f"Could not terminate {process_label}.\n\nReason: {failure_reason}",
                 QMessageBox.Icon.Warning,
             )
             if permission_denied:
@@ -443,10 +446,13 @@ class MainWindow(QMainWindow):
         """Ask user to confirm terminate action."""
         action_text = "terminate this process tree" if tree else "terminate this process"
         detail = "This will stop the selected process and all child processes." if tree else "This will stop only the selected process."
+        process_label = f"PID {pid}"
+        with contextlib.suppress(psutil.Error):
+            process_label = f"{psutil.Process(pid).name()} (PID {pid})"
         answer = QMessageBox.question(
             self,
             "Confirm terminate",
-            f"Are you sure you want to {action_text}?\n\nPID: {pid}\n\n{detail}",
+            f"Are you sure you want to {action_text}?\n\nProcess: {process_label}\n\n{detail}",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
