@@ -13,29 +13,32 @@ def get_pid_by_path(filepath: Path) -> int | None:
     return None
 
 
-def _terminate_process(proc: psutil.Process, stopped_pids: set[int], denied_pids: set[int]) -> str:
-    """Terminate a process and track outcome as 'ok', 'gone', or 'denied'."""
+def _signal_process(
+    proc: psutil.Process,
+    signal_name: str,
+    stopped_pids: set[int],
+    denied_pids: set[int],
+) -> str:
+    """Send a terminate/kill signal and track outcome as 'ok', 'gone', or 'denied'."""
     try:
-        proc.terminate()
+        getattr(proc, signal_name)()
         stopped_pids.add(proc.pid)
     except psutil.NoSuchProcess:
         return "gone"
     except psutil.AccessDenied:
         denied_pids.add(proc.pid)
         return "denied"
-    else:
-        return "ok"
+    return "ok"
+
+
+def _terminate_process(proc: psutil.Process, stopped_pids: set[int], denied_pids: set[int]) -> str:
+    """Terminate a process and track outcome as 'ok', 'gone', or 'denied'."""
+    return _signal_process(proc, "terminate", stopped_pids, denied_pids)
 
 
 def _kill_process(proc: psutil.Process, stopped_pids: set[int], denied_pids: set[int]) -> None:
     """Force-kill a process and track stopped/denied results."""
-    try:
-        proc.kill()
-        stopped_pids.add(proc.pid)
-    except psutil.NoSuchProcess:
-        return
-    except psutil.AccessDenied:
-        denied_pids.add(proc.pid)
+    _signal_process(proc, "kill", stopped_pids, denied_pids)
 
 
 def _collect_alive_after_wait(children: list[psutil.Process], denied_pids: set[int]) -> list[psutil.Process]:

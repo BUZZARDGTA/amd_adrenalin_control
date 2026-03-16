@@ -1,8 +1,27 @@
 """Process reporting helpers for AMD Adrenalin Control."""
 
 import contextlib
+from collections.abc import Callable
 
 import psutil
+
+
+def _safe_process_get(proc: psutil.Process, getter: Callable[[psutil.Process], str], default: str) -> str:
+    """Return getter(proc) or default when process info is unavailable."""
+    with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
+        return getter(proc)
+    return default
+
+
+def _parent_display_text(proc: psutil.Process) -> str:
+    """Build parent display text in the form '<name> (PID n)' when available."""
+    with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
+        parent_proc = proc.parent()
+        if parent_proc is None:
+            return "None"
+        parent_name = _safe_process_get(parent_proc, lambda item: item.name(), "<unknown>")
+        return f"{parent_name} (PID {parent_proc.pid})"
+    return "<unknown>"
 
 
 def capture_process_info(
@@ -22,26 +41,9 @@ def capture_process_info(
     path_text = "<unavailable>"
     try:
         proc = psutil.Process(pid)
-        with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
-            name = proc.name()
-
-        try:
-            parent_proc = proc.parent()
-            if parent_proc is None:
-                parent_text = "None"
-            else:
-                parent_name = "<unknown>"
-                with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
-                    parent_name = parent_proc.name()
-                parent_text = f"{parent_name} (PID {parent_proc.pid})"
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
-
-        try:
-            exe_path = proc.exe()
-            path_text = exe_path or "<unavailable>"
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
+        name = _safe_process_get(proc, lambda item: item.name(), "<unknown>")
+        parent_text = _parent_display_text(proc)
+        path_text = _safe_process_get(proc, lambda item: item.exe() or "<unavailable>", "<unavailable>")
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         pass
 

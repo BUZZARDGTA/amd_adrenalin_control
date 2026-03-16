@@ -38,6 +38,7 @@ PID_COLUMN_INDEX = 2
 STATUS_COLUMN_INDEX = 5
 NAME_COLUMN_INDEX = 0
 EVEN_ROW_REMAINDER = 0
+PROCESS_CREATE_TIME_EPSILON = 0.001
 
 
 class MainWindow(QMainWindow):
@@ -380,15 +381,67 @@ class MainWindow(QMainWindow):
             return pid_value
         return None
 
+    def _is_same_process_still_running(self, pid: int, target_create_time: float | None) -> bool:
+        """Return True if the original target process identity is still alive."""
+        if target_create_time is None:
+            with contextlib.suppress(psutil.Error):
+                return psutil.pid_exists(pid)
+            return False
+
+        with contextlib.suppress(psutil.Error):
+            probe = psutil.Process(pid)
+            return abs(probe.create_time() - target_create_time) < PROCESS_CREATE_TIME_EPSILON
+        return False
+
+    def _format_process_label(self, pid: int) -> str:
+        """Build a display label as '<name> (PID n)' with PID fallback."""
+        process_label = f"PID {pid}"
+        with contextlib.suppress(psutil.Error):
+            process_label = f"{psutil.Process(pid).name()} (PID {pid})"
+        return process_label
+
+    def _capture_target_create_times(self, pids: set[int]) -> dict[int, float | None]:
+        """Capture best-effort create times for target process identity checks."""
+        create_times: dict[int, float | None] = dict.fromkeys(pids)
+        for pid in pids:
+            with contextlib.suppress(psutil.Error):
+                create_times[pid] = psutil.Process(pid).create_time()
+        return create_times
+
+    def _filter_denied_pids_still_running(
+        self,
+        denied_pids: set[int],
+        target_create_times: dict[int, float | None],
+    ) -> set[int]:
+        """Keep denied pids only when the same original process is still running."""
+        return {
+            pid
+            for pid in denied_pids
+            if self._is_same_process_still_running(pid, target_create_times.get(pid))
+        }
+
+    def _classify_attempted_pids(
+        self,
+        attempted_pids: list[int],
+        stopped_pids: set[int],
+        denied_pids: set[int],
+    ) -> tuple[list[int], list[int], list[int]]:
+        """Split attempted pids into closed, denied, and already-gone groups."""
+        stopped_known = [pid for pid in attempted_pids if pid in stopped_pids]
+        denied_known = [pid for pid in attempted_pids if pid in denied_pids]
+        gone_known = [pid for pid in attempted_pids if pid not in stopped_pids and pid not in denied_pids]
+        return stopped_known, denied_known, gone_known
+
     def _terminate_single_process(self, pid: int) -> None:
         """Terminate a single process by PID and refresh the display."""
         failure_reason: str | None = None
         permission_denied = False
-        process_label = f"PID {pid}"
+        process_label = self._format_process_label(pid)
+        target_create_time: float | None = None
         try:
             proc = psutil.Process(pid)
             with contextlib.suppress(psutil.Error):
-                process_label = f"{proc.name()} (PID {pid})"
+                target_create_time = proc.create_time()
             proc.terminate()
             proc.wait(timeout=3)
         except psutil.AccessDenied:
@@ -411,6 +464,13 @@ class MainWindow(QMainWindow):
 
         self._refresh_process_info()
 
+        # On Windows, transient AccessDenied/Timeout paths can still end with the target gone.
+        # Only report failure if the same original process is still running.
+        if failure_reason is not None and not self._is_same_process_still_running(pid, target_create_time):
+            failure_reason = None
+            permission_denied = False
+            self.status_label.setText(f"Terminated {process_label}.")
+
         if failure_reason is not None:
             self.status_label.setText(f"Failed to terminate {process_label}: {failure_reason}")
             self._popup(
@@ -425,7 +485,9 @@ class MainWindow(QMainWindow):
 
     def _stop_single_process(self, pid: int) -> None:
         """Terminate a single process tree by PID and refresh the display."""
+        target_create_times = self._capture_target_create_times({pid})
         _, denied_pids = terminate_process_tree(pid)
+        denied_pids = self._filter_denied_pids_still_running(denied_pids, target_create_times)
         self._refresh_process_info()
         if denied_pids:
             self._offer_uac_elevation(
@@ -446,9 +508,7 @@ class MainWindow(QMainWindow):
         """Ask user to confirm terminate action."""
         action_text = "terminate this process tree" if tree else "terminate this process"
         detail = "This will stop the selected process and all child processes." if tree else "This will stop only the selected process."
-        process_label = f"PID {pid}"
-        with contextlib.suppress(psutil.Error):
-            process_label = f"{psutil.Process(pid).name()} (PID {pid})"
+        process_label = self._format_process_label(pid)
         answer = QMessageBox.question(
             self,
             "Confirm terminate",
@@ -675,15 +735,19 @@ class MainWindow(QMainWindow):
         denied_pids: set[int] = set()
         if attempted_pids:
             process_pid = attempted_pids[0]
+            target_create_times = self._capture_target_create_times(set(attempted_pids))
             stopped_pids, denied_pids = terminate_process_tree(process_pid)
+            denied_pids = self._filter_denied_pids_still_running(denied_pids, target_create_times)
 
         launch_detached(self.process_path)
         started_pid = self._wait_for_managed_process_start()
         started_categories, started_info = self._collect_managed_report_data(started_pid)
 
-        stopped_known = [pid for pid in attempted_pids if pid in stopped_pids]
-        denied_known = [pid for pid in attempted_pids if pid in denied_pids]
-        gone_known = [pid for pid in attempted_pids if pid not in stopped_pids and pid not in denied_pids]
+        stopped_known, denied_known, gone_known = self._classify_attempted_pids(
+            attempted_pids,
+            stopped_pids,
+            denied_pids,
+        )
         started_known = sorted(started_categories)
 
         report_sections = self._build_report_sections_from_pid_groups(
@@ -833,16 +897,17 @@ class MainWindow(QMainWindow):
 
         target_categories, process_info = self._collect_managed_report_data(pid)
 
+        target_create_times = self._capture_target_create_times(set(target_categories))
         stopped_pids, denied_pids = terminate_process_tree(pid)
+        denied_pids = self._filter_denied_pids_still_running(denied_pids, target_create_times)
 
         attempted_pids = sorted(target_categories)
-        stopped_known = [pid_val for pid_val in attempted_pids if pid_val in stopped_pids]
-        denied_known = [pid_val for pid_val in attempted_pids if pid_val in denied_pids]
-        gone_known = sorted(
-            pid_val
-            for pid_val in attempted_pids
-            if pid_val not in stopped_pids and pid_val not in denied_pids
+        stopped_known, denied_known, gone_known_unsorted = self._classify_attempted_pids(
+            attempted_pids,
+            stopped_pids,
+            denied_pids,
         )
+        gone_known = sorted(gone_known_unsorted)
 
         report_sections = self._build_report_sections_from_pid_groups(
             process_info,
@@ -941,7 +1006,9 @@ class MainWindow(QMainWindow):
             )
             return
 
+        target_create_times = self._capture_target_create_times(set(target_categories))
         stopped_pids_total, denied_pids_total = self._stop_targets(target_categories)
+        denied_pids_total = self._filter_denied_pids_still_running(denied_pids_total, target_create_times)
 
         for pid in stopped_pids_total | denied_pids_total:
             category = target_categories.get(pid, "Unknown")
