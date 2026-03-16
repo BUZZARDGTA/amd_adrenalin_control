@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -73,6 +74,7 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         """Construct and lay out all widgets in the main window."""
         central = QWidget(self)
+        central.setObjectName("central_widget")
         layout = QGridLayout(central)
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setHorizontalSpacing(12)
@@ -135,10 +137,14 @@ class MainWindow(QMainWindow):
     def _build_monitor_sections(self, layout: QGridLayout) -> None:
         """Build the process monitor scroll area and section tables."""
         monitor_scroll = QScrollArea(self)
+        monitor_scroll.setObjectName("monitor_scroll")
         monitor_scroll.setWidgetResizable(True)
         monitor_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        if viewport := monitor_scroll.viewport():
+            viewport.setObjectName("monitor_viewport")
 
         monitor_content = QWidget(monitor_scroll)
+        monitor_content.setObjectName("monitor_content")
         monitor_layout = QVBoxLayout(monitor_content)
         monitor_layout.setContentsMargins(0, 0, 0, 0)
         monitor_layout.setSpacing(14)
@@ -156,6 +162,11 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(
             """
             QMainWindow {
+                background-color: #0f141d;
+            }
+            QWidget#central_widget,
+            QWidget#monitor_content,
+            QWidget#monitor_viewport {
                 background-color: #0f141d;
             }
             QLabel {
@@ -264,6 +275,10 @@ class MainWindow(QMainWindow):
             QScrollArea {
                 background: transparent;
             }
+            QScrollArea#monitor_scroll {
+                border: none;
+                background-color: #0f141d;
+            }
             """,
         )
 
@@ -282,6 +297,7 @@ class MainWindow(QMainWindow):
         """Create a labeled process section with a dedicated table."""
         section = QWidget(parent)
         section.setObjectName("process_section")
+        section.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
 
         section_layout = QVBoxLayout(section)
         section_layout.setContentsMargins(12, 12, 12, 12)
@@ -312,6 +328,7 @@ class MainWindow(QMainWindow):
         table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
