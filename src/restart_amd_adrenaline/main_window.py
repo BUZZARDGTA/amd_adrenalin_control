@@ -379,15 +379,7 @@ class MainWindow(QMainWindow):
         pid_value = name_item.data(Qt.ItemDataRole.UserRole)
         if isinstance(pid_value, int):
             return pid_value
-
-        pid_item = table.item(row_idx, PID_COLUMN_INDEX)
-        if pid_item is None:
-            return None
-
-        try:
-            return int(pid_item.text())
-        except ValueError:
-            return None
+        return None
 
     def _terminate_single_process(self, pid: int) -> None:
         """Terminate a single process by PID and refresh the display."""
