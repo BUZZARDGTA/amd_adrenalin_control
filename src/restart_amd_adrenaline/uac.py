@@ -15,42 +15,39 @@ def is_running_as_admin() -> bool:
     if os.name != "nt":
         return False
 
-    try:
-        token_handle = wintypes.HANDLE()
-        token_query = 0x0008
-        token_elevation_class = 20
+    token_handle = wintypes.HANDLE()
+    token_query = 0x0008
+    token_elevation_class = 20
 
-        opened = ctypes.windll.advapi32.OpenProcessToken(
-            ctypes.windll.kernel32.GetCurrentProcess(),
-            token_query,
-            ctypes.byref(token_handle),
+    opened = ctypes.windll.advapi32.OpenProcessToken(
+        ctypes.windll.kernel32.GetCurrentProcess(),
+        token_query,
+        ctypes.byref(token_handle),
+    )
+    if not opened:
+        return False
+
+    class TokenElevation(ctypes.Structure):  # pylint: disable=too-few-public-methods
+        """Maps to the Windows TOKEN_ELEVATION struct."""
+
+        _fields_ = [("TokenIsElevated", wintypes.DWORD)]
+
+    elevation = TokenElevation()
+    return_length = wintypes.DWORD(0)
+    try:
+        queried = ctypes.windll.advapi32.GetTokenInformation(
+            token_handle,
+            token_elevation_class,
+            ctypes.byref(elevation),
+            ctypes.sizeof(elevation),
+            ctypes.byref(return_length),
         )
-        if not opened:
+        if not queried:
             return False
 
-        class TokenElevation(ctypes.Structure):  # pylint: disable=too-few-public-methods
-            """Maps to the Windows TOKEN_ELEVATION struct."""
-
-            _fields_ = [("TokenIsElevated", wintypes.DWORD)]
-
-        elevation = TokenElevation()
-        return_length = wintypes.DWORD(0)
-        try:
-            queried = ctypes.windll.advapi32.GetTokenInformation(
-                token_handle,
-                token_elevation_class,
-                ctypes.byref(elevation),
-                ctypes.sizeof(elevation),
-                ctypes.byref(return_length),
-            )
-            if not queried:
-                return False
-
-            return bool(elevation.TokenIsElevated)
-        finally:
-            ctypes.windll.kernel32.CloseHandle(token_handle)
-    except (OSError, AttributeError):
-        return False
+        return bool(elevation.TokenIsElevated)
+    finally:
+        ctypes.windll.kernel32.CloseHandle(token_handle)
 
 
 def request_self_elevation() -> bool:
@@ -60,17 +57,14 @@ def request_self_elevation() -> bool:
 
     executable = _resolve_windows_python_executable()
     params = subprocess.list2cmdline(_build_elevated_argv())
-    try:
-        result = ctypes.windll.shell32.ShellExecuteW(
-            None,
-            "runas",
-            executable,
-            params,
-            str(Path.cwd()),
-            1,
-        )
-    except (OSError, AttributeError):
-        return False
+    result = ctypes.windll.shell32.ShellExecuteW(
+        None,
+        "runas",
+        executable,
+        params,
+        str(Path.cwd()),
+        1,
+    )
 
     return result > _SHELL_EXECUTE_SUCCESS_MIN
 
@@ -100,10 +94,7 @@ def _build_elevated_argv() -> list[str]:
 
 def _resolve_entry_script() -> Path | None:
     """Resolve the repository entrypoint script for elevated relaunch."""
-    try:
-        repo_root = Path(__file__).resolve().parents[2]
-    except (OSError, IndexError):
-        return None
+    repo_root = Path(__file__).resolve().parents[2]
 
     main_script = repo_root / "main.py"
     if main_script.exists():
