@@ -144,6 +144,12 @@ class ProcessReportDialog(QDialog):
         self.setMinimumSize(860, 620)
         self.resize(980, 720)
 
+        populated_sections = [
+            (section_title, entries)
+            for section_title, entries in sections
+            if entries
+        ]
+
         heading_text, accent = NotificationDialog.icon_theme(icon)
 
         root = QVBoxLayout(self)
@@ -157,30 +163,34 @@ class ProcessReportDialog(QDialog):
         subtitle.setObjectName("report_subheading")
 
         scroll = QScrollArea(self)
+        scroll.setObjectName("report_scroll")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        if viewport := scroll.viewport():
+            viewport.setObjectName("report_viewport")
 
         body = QWidget(scroll)
+        body.setObjectName("report_body")
         body_layout = QVBoxLayout(body)
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(12)
 
-        for section_title, entries in sections:
-            section = QFrame(body)
-            section.setObjectName("report_section")
-            section_layout = QVBoxLayout(section)
-            section_layout.setContentsMargins(12, 12, 12, 12)
-            section_layout.setSpacing(8)
+        if not populated_sections:
+            empty = QLabel("No processes to report.", body)
+            empty.setObjectName("report_empty")
+            body_layout.addWidget(empty)
+        else:
+            for section_title, entries in populated_sections:
+                section = QFrame(body)
+                section.setObjectName("report_section")
+                section_layout = QVBoxLayout(section)
+                section_layout.setContentsMargins(12, 12, 12, 12)
+                section_layout.setSpacing(8)
 
-            section_header = QLabel(f"{section_title} ({len(entries)})", section)
-            section_header.setObjectName("report_section_title")
-            section_layout.addWidget(section_header)
+                section_header = QLabel(f"{section_title} ({len(entries)})", section)
+                section_header.setObjectName("report_section_title")
+                section_layout.addWidget(section_header)
 
-            if not entries:
-                empty = QLabel("No entries.", section)
-                empty.setObjectName("report_empty")
-                section_layout.addWidget(empty)
-            else:
                 for entry in entries:
                     card = QFrame(section)
                     card.setObjectName("report_card")
@@ -218,7 +228,7 @@ class ProcessReportDialog(QDialog):
                     card_layout.addWidget(path_value)
                     section_layout.addWidget(card)
 
-            body_layout.addWidget(section)
+                body_layout.addWidget(section)
 
         body_layout.addStretch()
         scroll.setWidget(body)
@@ -238,6 +248,12 @@ class ProcessReportDialog(QDialog):
                 color: #d7e3f5;
                 border: 1px solid #1d2b43;
                 border-radius: 12px;
+            }}
+            QScrollArea#report_scroll,
+            QWidget#report_viewport,
+            QWidget#report_body {{
+                background-color: #0c1320;
+                border: none;
             }}
             QLabel#report_heading {{
                 color: {accent};

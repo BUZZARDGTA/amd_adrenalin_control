@@ -1,9 +1,10 @@
 """Main application window and UI behavior."""
 
 import contextlib
+import time
 
 import psutil
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import QCoreApplication, Qt, QTimer
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QGridLayout,
@@ -449,6 +450,66 @@ class MainWindow(QMainWindow):
         dialog = ProcessReportDialog(self, title, icon, sections)
         dialog.exec()
 
+    def _wait_for_managed_process_start(
+        self,
+        *,
+        timeout_seconds: float = 3.0,
+        poll_interval_seconds: float = 0.1,
+    ) -> int | None:
+        """Poll for the managed Radeon Software process to appear after launch."""
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            pid = get_pid_by_path(self.process_path)
+            if pid is not None:
+                return pid
+            QCoreApplication.processEvents()
+            time.sleep(poll_interval_seconds)
+        return get_pid_by_path(self.process_path)
+
+    def _collect_process_tree_targets_for_pid(
+        self,
+        pid: int,
+        category: str,
+        target_categories: dict[int, str],
+        process_info: dict[int, dict[str, str]],
+    ) -> None:
+        """Capture a process tree rooted at pid into shared report dictionaries."""
+        target_categories[pid] = category
+        self._capture_process_info(process_info, pid, category)
+
+        try:
+            parent = psutil.Process(pid)
+            for child in parent.children(recursive=True):
+                target_categories[child.pid] = category
+                self._capture_process_info(process_info, child.pid, category)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+    def _collect_managed_report_data(
+        self,
+        pid: int | None = None,
+    ) -> tuple[dict[int, str], dict[int, dict[str, str]]]:
+        """Collect managed Radeon Software process-tree metadata for reporting."""
+        target_categories: dict[int, str] = {}
+        process_info: dict[int, dict[str, str]] = {}
+
+        managed_pid = get_pid_by_path(self.process_path) if pid is None else pid
+        if managed_pid is not None:
+            self._collect_process_tree_targets_for_pid(managed_pid, "Managed", target_categories, process_info)
+
+        return target_categories, process_info
+
+    def _build_report_sections_from_pid_groups(
+        self,
+        process_info: dict[int, dict[str, str]],
+        section_pid_groups: list[tuple[str, list[int]]],
+    ) -> list[tuple[str, list[dict[str, str]]]]:
+        """Build structured report sections from ordered PID groups."""
+        return [
+            (section_title, [self._to_report_entry(process_info, pid) for pid in pids])
+            for section_title, pids in section_pid_groups
+        ]
+
     def restart_software(self) -> None:
         """Stop any running instance of Radeon Software, then launch a fresh one."""
         if not self.process_path.exists():
@@ -460,17 +521,45 @@ class MainWindow(QMainWindow):
             )
             return
 
-        process_pid = get_pid_by_path(self.process_path)
-        if process_pid:
-            terminate_process_tree(process_pid)
+        before_categories, before_info = self._collect_managed_report_data()
+        attempted_pids = sorted(before_categories)
+
+        stopped_pids: set[int] = set()
+        denied_pids: set[int] = set()
+        if attempted_pids:
+            process_pid = attempted_pids[0]
+            stopped_pids, denied_pids = terminate_process_tree(process_pid)
 
         launch_detached(self.process_path)
-        self.status_label.setText("RadeonSoftware.exe restarted successfully.")
-        self._popup(
-            "Restart complete",
-            "AMD Adrenalin has been restarted successfully.",
-            QMessageBox.Icon.Information,
+        started_pid = self._wait_for_managed_process_start()
+        started_categories, started_info = self._collect_managed_report_data(started_pid)
+
+        stopped_known = [pid for pid in attempted_pids if pid in stopped_pids]
+        denied_known = [pid for pid in attempted_pids if pid in denied_pids]
+        gone_known = [pid for pid in attempted_pids if pid not in stopped_pids and pid not in denied_pids]
+        started_known = sorted(started_categories)
+
+        report_sections = self._build_report_sections_from_pid_groups(
+            before_info | started_info,
+            [
+                ("Closed", stopped_known),
+                ("Could not close (permissions)", denied_known),
+                ("Already gone / ended during action", gone_known),
+                ("Started", started_known),
+            ],
         )
+
+        if denied_known or not started_known:
+            self.status_label.setText(
+                f"Restart partial: closed {len(stopped_known)}, started {len(started_known)}, denied {len(denied_known)}.",
+            )
+            self._show_process_report("Restart partial", QMessageBox.Icon.Warning, report_sections)
+            return
+
+        self.status_label.setText(
+            f"Restarted AMD Adrenalin: closed {len(stopped_known)}, started {len(started_known)}.",
+        )
+        self._show_process_report("Restart complete", QMessageBox.Icon.Information, report_sections)
 
     def start_only(self) -> None:
         """Launch Radeon Software without stopping any existing instance first."""
@@ -485,25 +574,35 @@ class MainWindow(QMainWindow):
 
         existing_pid = get_pid_by_path(self.process_path)
         if existing_pid is not None:
-            process_name = self.process_path.name
-            with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
-                process_name = psutil.Process(existing_pid).name()
+            existing_categories, existing_info = self._collect_managed_report_data(existing_pid)
 
             self.status_label.setText("RadeonSoftware.exe is already running.")
-            self._popup(
+            self._show_process_report(
                 "Already running",
-                f"AMD Adrenalin is already running: {process_name} (PID {existing_pid}).",
                 QMessageBox.Icon.Information,
+                self._build_report_sections_from_pid_groups(
+                    existing_info,
+                    [("Running", sorted(existing_categories))],
+                ),
             )
             return
 
         launch_detached(self.process_path)
-        self.status_label.setText("RadeonSoftware.exe started.")
-        self._popup(
-            "Started",
-            "AMD Adrenalin was launched.",
-            QMessageBox.Icon.Information,
+        started_pid = self._wait_for_managed_process_start()
+        started_categories, started_info = self._collect_managed_report_data(started_pid)
+        started_known = sorted(started_categories)
+        report_sections = self._build_report_sections_from_pid_groups(
+            started_info,
+            [("Started", started_known)],
         )
+
+        if not started_known:
+            self.status_label.setText("Launch requested, but no AMD Adrenalin process was detected yet.")
+            self._show_process_report("Start status", QMessageBox.Icon.Warning, report_sections)
+            return
+
+        self.status_label.setText(f"Started {len(started_known)} AMD Adrenalin process(es).")
+        self._show_process_report("Started", QMessageBox.Icon.Information, report_sections)
 
     def _collect_running_processes(self) -> dict[int, psutil.Process]:
         """Collect running processes keyed by PID and warm up CPU counters."""
@@ -600,82 +699,38 @@ class MainWindow(QMainWindow):
             )
             return
 
-        attempted_processes: dict[int, str] = {}
-        try:
-            parent = psutil.Process(pid)
-            try:
-                attempted_processes[parent.pid] = parent.name()
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                attempted_processes[parent.pid] = self.process_path.name
-
-            try:
-                for child in parent.children(recursive=True):
-                    try:
-                        attempted_processes[child.pid] = child.name()
-                    except (psutil.NoSuchProcess, psutil.AccessDenied):
-                        attempted_processes[child.pid] = "<unknown>"
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            attempted_processes[pid] = self.process_path.name
+        target_categories, process_info = self._collect_managed_report_data(pid)
 
         stopped_pids, denied_pids = terminate_process_tree(pid)
 
-        attempted_pids = set(attempted_processes)
-        stopped_known = sorted(pid_val for pid_val in attempted_pids if pid_val in stopped_pids)
-        denied_known = sorted(pid_val for pid_val in attempted_pids if pid_val in denied_pids)
+        attempted_pids = sorted(target_categories)
+        stopped_known = [pid_val for pid_val in attempted_pids if pid_val in stopped_pids]
+        denied_known = [pid_val for pid_val in attempted_pids if pid_val in denied_pids]
         gone_known = sorted(
             pid_val
             for pid_val in attempted_pids
             if pid_val not in stopped_pids and pid_val not in denied_pids
         )
 
-        stopped_entries = [
-            {
-                "name": attempted_processes[pid_val],
-                "pid": str(pid_val),
-                "category": "Managed",
-                "parent": "Managed tree",
-                "path": "<unavailable>",
-            }
-            for pid_val in stopped_known
-        ]
-        denied_entries = [
-            {
-                "name": attempted_processes[pid_val],
-                "pid": str(pid_val),
-                "category": "Managed",
-                "parent": "Managed tree",
-                "path": "<unavailable>",
-            }
-            for pid_val in denied_known
-        ]
-        gone_entries = [
-            {
-                "name": attempted_processes[pid_val],
-                "pid": str(pid_val),
-                "category": "Managed",
-                "parent": "Managed tree",
-                "path": "<unavailable>",
-            }
-            for pid_val in gone_known
-        ]
-        report_sections = [
-            ("Closed", stopped_entries),
-            ("Could not close (permissions)", denied_entries),
-            ("Already gone", gone_entries),
-        ]
+        report_sections = self._build_report_sections_from_pid_groups(
+            process_info,
+            [
+                ("Closed", stopped_known),
+                ("Could not close (permissions)", denied_known),
+                ("Already gone / ended during action", gone_known),
+            ],
+        )
 
         if denied_known:
             self.status_label.setText(
-                f"Stop partial: closed {len(stopped_entries)}, denied {len(denied_entries)}.",
+                f"Stop partial: closed {len(stopped_known)}, denied {len(denied_known)}.",
             )
             self._show_process_report("Stop partial", QMessageBox.Icon.Warning, report_sections)
             return
 
         if stopped_pids:
             self.status_label.setText(
-                f"Stopped {len(stopped_entries)} AMD Adrenalin process(es).",
+                f"Stopped {len(stopped_known)} AMD Adrenalin process(es).",
             )
             self._show_process_report("Stopped", QMessageBox.Icon.Information, report_sections)
             return
@@ -741,15 +796,7 @@ class MainWindow(QMainWindow):
         if main_pid is None:
             return
 
-        target_categories[main_pid] = "Managed"
-        self._capture_process_info(process_info, main_pid, "Managed")
-        try:
-            parent = psutil.Process(main_pid)
-            for child in parent.children(recursive=True):
-                target_categories[child.pid] = "Managed"
-                self._capture_process_info(process_info, child.pid, "Managed")
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
+        self._collect_process_tree_targets_for_pid(main_pid, "Managed", target_categories, process_info)
 
     def _collect_companion_service_targets(
         self,
