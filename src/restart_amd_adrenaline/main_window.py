@@ -7,7 +7,6 @@ import psutil
 from PyQt6.QtCore import QCoreApplication, QPoint, Qt, QTimer
 from PyQt6.QtGui import QAction, QColor, QKeySequence
 from PyQt6.QtWidgets import (
-    QApplication,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
@@ -24,11 +23,13 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ._report_helpers import build_stop_all_report_sections, capture_process_info, to_report_entry
+from ._stylesheet import MAIN_STYLESHEET
 from .constants import COMPANION_NAMES, RADEON_SOFTWARE_PATH, SERVICE_NAMES, STATUS_COLORS
 from .dialogs import NotificationDialog, ProcessReportDialog
 from .process_ops import get_pid_by_path, launch_detached, terminate_process_tree
 from .uac import is_debug_session, is_running_as_admin, request_self_elevation
-from .ui_helpers import require_qheader_view, require_str
+from .ui_helpers import copy_selected_cells, copy_selected_rows, require_qheader_view, require_str
 
 PATH_COLUMN_INDEX = 1
 PID_COLUMN_INDEX = 2
@@ -166,158 +167,7 @@ class MainWindow(QMainWindow):
 
     def _apply_stylesheet(self) -> None:
         """Apply the main window stylesheet."""
-        self.setStyleSheet(
-            """
-            QMainWindow {
-                background-color: #0f141d;
-            }
-            QWidget#central_widget,
-            QWidget#monitor_content,
-            QWidget#monitor_viewport {
-                background-color: #0f141d;
-            }
-            QLabel {
-                color: #e9eef8;
-                font-size: 13px;
-            }
-            QPushButton {
-                background-color: #1f6feb;
-                color: #ffffff;
-                border: none;
-                border-radius: 8px;
-                font-size: 13px;
-                font-weight: 600;
-                padding: 8px 12px;
-            }
-            QPushButton:hover {
-                background-color: #3a82f7;
-            }
-            QPushButton:pressed {
-                background-color: #1759bf;
-            }
-            QPushButton#start_btn {
-                background-color: #15803d;
-            }
-            QPushButton#start_btn:hover {
-                background-color: #16a34a;
-            }
-            QPushButton#start_btn:pressed {
-                background-color: #166534;
-            }
-            QPushButton#stop_btn {
-                background-color: #b91c1c;
-            }
-            QPushButton#stop_btn:hover {
-                background-color: #dc2626;
-            }
-            QPushButton#stop_btn:pressed {
-                background-color: #991b1b;
-            }
-            QPushButton#stop_all_btn {
-                background-color: #7f1d1d;
-                border: 1px solid #991b1b;
-            }
-            QPushButton#stop_all_btn:hover {
-                background-color: #991b1b;
-            }
-            QPushButton#stop_all_btn:pressed {
-                background-color: #7a1616;
-            }
-            QTableWidget#process_table {
-                background-color: #0d1220;
-                color: #c9d8f0;
-                border: 1px solid #1e2d45;
-                border-radius: 6px;
-                gridline-color: #1a2540;
-                font-size: 12px;
-                outline: 0;
-            }
-            QTableWidget#process_table::item {
-                padding: 6px 10px;
-                border: none;
-            }
-            QTableWidget#process_table::item:selected {
-                background-color: #1c2e4a;
-                color: #e9eef8;
-            }
-            QHeaderView::section {
-                background-color: #141c2e;
-                color: #6a9fd8;
-                font-size: 11px;
-                font-weight: 700;
-                padding: 6px 10px;
-                border: none;
-                border-bottom: 1px solid #1e2d45;
-            }
-            QHeaderView::section:vertical {
-                width: 0px;
-                padding: 0px;
-                margin: 0px;
-                border: none;
-                background: transparent;
-                color: transparent;
-            }
-            QTableCornerButton::section {
-                border: none;
-                background: transparent;
-            }
-            QMenu {
-                background-color: #0d1220;
-                color: #e9eef8;
-                border: 1px solid #1e2d45;
-                padding: 6px;
-            }
-            QMenu::item {
-                padding: 6px 20px 6px 12px;
-                border-radius: 4px;
-            }
-            QMenu::item:selected {
-                background-color: #1c2e4a;
-            }
-            QMenu::separator {
-                height: 1px;
-                background: #4f6b90;
-                margin: 6px 10px;
-            }
-            QLabel#monitor_label {
-                color: #6a9fd8;
-                font-size: 11px;
-                font-weight: 700;
-            }
-            QLabel#section_header {
-                color: #6a9fd8;
-                font-size: 12px;
-                font-weight: 700;
-                letter-spacing: 0.6px;
-            }
-            QLabel#section_description {
-                color: #8ea7c7;
-                font-size: 11px;
-            }
-            QLabel#badge_running {
-                color: #22c55e;
-                font-size: 11px;
-                font-weight: 700;
-            }
-            QLabel#badge_stopped {
-                color: #ef4444;
-                font-size: 11px;
-                font-weight: 700;
-            }
-            QWidget#process_section {
-                background-color: #0b111d;
-                border: 1px solid #182338;
-                border-radius: 8px;
-            }
-            QScrollArea {
-                background: transparent;
-            }
-            QScrollArea#monitor_scroll {
-                border: none;
-                background-color: #0f141d;
-            }
-            """,
-        )
+        self.setStyleSheet(MAIN_STYLESHEET)
 
     def _show_process_sections(self) -> None:
         """Ensure all process sections are visible after UI construction."""
@@ -340,7 +190,7 @@ class MainWindow(QMainWindow):
         copy_action.setShortcut(QKeySequence.StandardKey.Copy)
         copy_action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         copy_action.triggered.connect(  # pyright: ignore[reportUnknownMemberType]
-            lambda _, current_table=table: self._copy_selected_cells(current_table),
+            lambda _, current_table=table: copy_selected_cells(current_table),
         )
         table.addAction(copy_action)
         table.itemSelectionChanged.connect(  # pyright: ignore[reportUnknownMemberType]
@@ -579,65 +429,6 @@ class MainWindow(QMainWindow):
                     reason="Windows denied permission while trying to terminate the selected process.",
                 )
 
-    def _copy_selected_rows(self, table: QTableWidget) -> None:
-        """Copy selected table rows to the clipboard as tab-separated text."""
-        selection_model = table.selectionModel()
-        if selection_model is None:
-            return
-
-        selected_indexes = selection_model.selectedIndexes()
-        if not selected_indexes:
-            return
-
-        row_numbers = sorted({index.row() for index in selected_indexes})
-        copied_rows: list[str] = []
-        for row_idx in row_numbers:
-            row_values: list[str] = []
-            for col_idx in range(table.columnCount()):
-                item = table.item(row_idx, col_idx)
-                row_values.append(item.text() if item is not None else "")
-            copied_rows.append("\t".join(row_values))
-
-        clipboard = QApplication.clipboard()
-        if clipboard is None:
-            return
-
-        clipboard.setText("\n".join(copied_rows))
-
-    def _copy_selected_cells(self, table: QTableWidget) -> None:
-        """Copy selected cells to the clipboard preserving row/column layout."""
-        selection_model = table.selectionModel()
-        if selection_model is None:
-            return
-
-        selected_indexes = selection_model.selectedIndexes()
-        if not selected_indexes:
-            return
-
-        min_row = min(index.row() for index in selected_indexes)
-        max_row = max(index.row() for index in selected_indexes)
-        min_col = min(index.column() for index in selected_indexes)
-        max_col = max(index.column() for index in selected_indexes)
-        selected_positions = {(index.row(), index.column()) for index in selected_indexes}
-
-        copied_rows: list[str] = []
-        for row_idx in range(min_row, max_row + 1):
-            row_values: list[str] = []
-            for col_idx in range(min_col, max_col + 1):
-                if (row_idx, col_idx) not in selected_positions:
-                    row_values.append("")
-                    continue
-
-                item = table.item(row_idx, col_idx)
-                row_values.append(item.text() if item is not None else "")
-            copied_rows.append("\t".join(row_values))
-
-        clipboard = QApplication.clipboard()
-        if clipboard is None:
-            return
-
-        clipboard.setText("\n".join(copied_rows))
-
     def _stop_single_process(self, pid: int) -> None:
         """Terminate a single process tree by PID and refresh the display."""
         _, denied_pids = terminate_process_tree(pid)
@@ -687,11 +478,11 @@ class MainWindow(QMainWindow):
             return
 
         if copy_cells_action is not None and chosen_action == copy_cells_action:
-            self._copy_selected_cells(table)
+            copy_selected_cells(table)
             return
 
         if copy_rows_action is not None and chosen_action == copy_rows_action:
-            self._copy_selected_rows(table)
+            copy_selected_rows(table)
             return
 
         if (
@@ -833,13 +624,13 @@ class MainWindow(QMainWindow):
     ) -> None:
         """Capture a process tree rooted at pid into shared report dictionaries."""
         target_categories[pid] = category
-        self._capture_process_info(process_info, pid, category)
+        capture_process_info(process_info, pid, category)
 
         try:
             parent = psutil.Process(pid)
             for child in parent.children(recursive=True):
                 target_categories[child.pid] = category
-                self._capture_process_info(process_info, child.pid, category)
+                capture_process_info(process_info, child.pid, category)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
 
@@ -864,7 +655,7 @@ class MainWindow(QMainWindow):
     ) -> list[tuple[str, list[dict[str, str]]]]:
         """Build structured report sections from ordered PID groups."""
         return [
-            (section_title, [self._to_report_entry(process_info, pid) for pid in pids])
+            (section_title, [to_report_entry(process_info, pid) for pid in pids])
             for section_title, pids in section_pid_groups
         ]
 
@@ -1103,54 +894,6 @@ class MainWindow(QMainWindow):
         self.status_label.setText("RadeonSoftware.exe is no longer running.")
         self._show_process_report("Already stopped", QMessageBox.Icon.Information, report_sections)
 
-    def _capture_process_info(
-        self,
-        process_info: dict[int, dict[str, str]],
-        pid: int,
-        category: str,
-    ) -> None:
-        """Capture best-effort process metadata for reporting."""
-        existing = process_info.get(pid)
-        if existing is not None:
-            if existing.get("category") == "Unknown" and category != "Unknown":
-                existing["category"] = category
-            return
-
-        name = "<unknown>"
-        parent_text = "<unknown>"
-        path_text = "<unavailable>"
-        try:
-            proc = psutil.Process(pid)
-            with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
-                name = proc.name()
-
-            try:
-                parent_proc = proc.parent()
-                if parent_proc is None:
-                    parent_text = "None"
-                else:
-                    parent_name = "<unknown>"
-                    with contextlib.suppress(psutil.NoSuchProcess, psutil.AccessDenied):
-                        parent_name = parent_proc.name()
-                    parent_text = f"{parent_name} (PID {parent_proc.pid})"
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-
-            try:
-                exe_path = proc.exe()
-                path_text = exe_path or "<unavailable>"
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            pass
-
-        process_info[pid] = {
-            "name": name,
-            "category": category,
-            "parent": parent_text,
-            "path": path_text,
-        }
-
     def _collect_managed_targets(
         self,
         target_categories: dict[int, str],
@@ -1181,12 +924,12 @@ class MainWindow(QMainWindow):
 
                 category = "Companion" if name_lower in COMPANION_NAMES else "Service"
                 target_categories[proc.pid] = category
-                self._capture_process_info(process_info, proc.pid, category)
+                capture_process_info(process_info, proc.pid, category)
                 try:
                     for child in proc.children(recursive=True):
                         if child.pid not in target_categories:
                             target_categories[child.pid] = category
-                        self._capture_process_info(process_info, child.pid, category)
+                        capture_process_info(process_info, child.pid, category)
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     pass
             except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -1201,70 +944,6 @@ class MainWindow(QMainWindow):
             stopped_pids_total.update(stopped_pids)
             denied_pids_total.update(denied_pids)
         return stopped_pids_total, denied_pids_total
-
-    def _to_report_entry(self, process_info: dict[int, dict[str, str]], pid: int) -> dict[str, str]:
-        """Build a single report row for a PID from captured process metadata."""
-        info = process_info.get(
-            pid,
-            {
-                "name": "<unknown>",
-                "category": "Unknown",
-                "parent": "<unknown>",
-                "path": "<unavailable>",
-            },
-        )
-        return {
-            "name": info["name"],
-            "pid": str(pid),
-            "category": info["category"],
-            "parent": info["parent"],
-            "path": info["path"],
-        }
-
-    def _build_stop_all_report_sections(
-        self,
-        process_info: dict[int, dict[str, str]],
-        stopped_pids_total: set[int],
-        denied_pids_total: set[int],
-    ) -> list[tuple[str, list[dict[str, str]]]]:
-        """Build grouped report sections for stop-all results."""
-        attempted_pids = set(process_info)
-        category_order: dict[str, int] = {
-            "Managed": 0,
-            "Companion": 1,
-            "Service": 2,
-            "Unknown": 3,
-        }
-
-        def report_sort_key(pid: int) -> tuple[int, int]:
-            info = process_info.get(pid)
-            category = info["category"] if info is not None else "Unknown"
-            return category_order.get(category, 99), pid
-
-        stopped_known = sorted(
-            (pid for pid in attempted_pids if pid in stopped_pids_total),
-            key=report_sort_key,
-        )
-        denied_known = sorted(
-            (pid for pid in attempted_pids if pid in denied_pids_total),
-            key=report_sort_key,
-        )
-        gone_known = sorted(
-            (pid for pid in attempted_pids if pid not in stopped_pids_total and pid not in denied_pids_total),
-            key=report_sort_key,
-        )
-
-        return [
-            ("Closed", [self._to_report_entry(process_info, pid) for pid in stopped_known]),
-            (
-                "Could not close (permissions)",
-                [self._to_report_entry(process_info, pid) for pid in denied_known],
-            ),
-            (
-                "Already gone / ended during action",
-                [self._to_report_entry(process_info, pid) for pid in gone_known],
-            ),
-        ]
 
     def stop_all(self) -> None:
         """Terminate Radeon Software plus monitored AMD companion and service processes."""
@@ -1287,9 +966,9 @@ class MainWindow(QMainWindow):
 
         for pid in stopped_pids_total | denied_pids_total:
             category = target_categories.get(pid, "Unknown")
-            self._capture_process_info(process_info, pid, category)
+            capture_process_info(process_info, pid, category)
 
-        report_sections = self._build_stop_all_report_sections(
+        report_sections = build_stop_all_report_sections(
             process_info,
             stopped_pids_total,
             denied_pids_total,

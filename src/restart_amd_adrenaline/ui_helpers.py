@@ -1,6 +1,6 @@
 """UI-specific runtime type validation helpers."""
 
-from PyQt6.QtWidgets import QHeaderView
+from PyQt6.QtWidgets import QApplication, QHeaderView, QTableWidget
 
 
 class InvalidTypeError(TypeError):
@@ -24,3 +24,64 @@ def require_qheader_view(value: object, field_name: str) -> QHeaderView:
     if not isinstance(value, QHeaderView):
         raise InvalidTypeError(field_name, "QHeaderView", type(value).__name__)
     return value
+
+
+def copy_selected_rows(table: QTableWidget) -> None:
+    """Copy selected table rows to the clipboard as tab-separated text."""
+    selection_model = table.selectionModel()
+    if selection_model is None:
+        return
+
+    selected_indexes = selection_model.selectedIndexes()
+    if not selected_indexes:
+        return
+
+    row_numbers = sorted({index.row() for index in selected_indexes})
+    copied_rows: list[str] = []
+    for row_idx in row_numbers:
+        row_values: list[str] = []
+        for col_idx in range(table.columnCount()):
+            item = table.item(row_idx, col_idx)
+            row_values.append(item.text() if item is not None else "")
+        copied_rows.append("\t".join(row_values))
+
+    clipboard = QApplication.clipboard()
+    if clipboard is None:
+        return
+
+    clipboard.setText("\n".join(copied_rows))
+
+
+def copy_selected_cells(table: QTableWidget) -> None:
+    """Copy selected cells to the clipboard preserving row/column layout."""
+    selection_model = table.selectionModel()
+    if selection_model is None:
+        return
+
+    selected_indexes = selection_model.selectedIndexes()
+    if not selected_indexes:
+        return
+
+    min_row = min(index.row() for index in selected_indexes)
+    max_row = max(index.row() for index in selected_indexes)
+    min_col = min(index.column() for index in selected_indexes)
+    max_col = max(index.column() for index in selected_indexes)
+    selected_positions = {(index.row(), index.column()) for index in selected_indexes}
+
+    copied_rows: list[str] = []
+    for row_idx in range(min_row, max_row + 1):
+        row_values: list[str] = []
+        for col_idx in range(min_col, max_col + 1):
+            if (row_idx, col_idx) not in selected_positions:
+                row_values.append("")
+                continue
+
+            item = table.item(row_idx, col_idx)
+            row_values.append(item.text() if item is not None else "")
+        copied_rows.append("\t".join(row_values))
+
+    clipboard = QApplication.clipboard()
+    if clipboard is None:
+        return
+
+    clipboard.setText("\n".join(copied_rows))
