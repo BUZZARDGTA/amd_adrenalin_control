@@ -17,6 +17,11 @@ venv/
 .vscode/
 .idea/
 
+# Share VS Code run task across the repository
+!.vscode/
+.vscode/*
+!.vscode/tasks.json
+
 # OS files
 .DS_Store
 Thumbs.db

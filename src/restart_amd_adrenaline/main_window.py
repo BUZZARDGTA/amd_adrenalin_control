@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
 from .constants import COMPANION_NAMES, RADEON_SOFTWARE_PATH, SERVICE_NAMES, STATUS_COLORS
 from .dialogs import NotificationDialog, ProcessReportDialog
 from .process_ops import get_pid_by_path, launch_detached, terminate_process_tree
+from .uac import is_debug_session, is_running_as_admin, request_self_elevation
 from .ui_helpers import require_qheader_view, require_str
 
 PATH_COLUMN_INDEX = 1
@@ -541,12 +542,14 @@ class MainWindow(QMainWindow):
     def _terminate_single_process(self, pid: int) -> None:
         """Terminate a single process by PID and refresh the display."""
         failure_reason: str | None = None
+        permission_denied = False
         try:
             proc = psutil.Process(pid)
             proc.terminate()
             proc.wait(timeout=3)
         except psutil.AccessDenied:
             failure_reason = "Permission denied while terminating the process. Try running as administrator."
+            permission_denied = True
         except psutil.TimeoutExpired:
             try:
                 proc = psutil.Process(pid)
@@ -554,6 +557,7 @@ class MainWindow(QMainWindow):
                 proc.wait(timeout=3)
             except psutil.AccessDenied:
                 failure_reason = "Permission denied while force-stopping the process. Try running as administrator."
+                permission_denied = True
             except psutil.TimeoutExpired:
                 failure_reason = "The process did not exit after terminate and force-stop attempts."
             except psutil.NoSuchProcess:
@@ -570,6 +574,10 @@ class MainWindow(QMainWindow):
                 f"Could not terminate PID {pid}.\n\nReason: {failure_reason}",
                 QMessageBox.Icon.Warning,
             )
+            if permission_denied:
+                self._offer_uac_elevation(
+                    reason="Windows denied permission while trying to terminate the selected process.",
+                )
 
     def _copy_selected_rows(self, table: QTableWidget) -> None:
         """Copy selected table rows to the clipboard as tab-separated text."""
@@ -632,8 +640,12 @@ class MainWindow(QMainWindow):
 
     def _stop_single_process(self, pid: int) -> None:
         """Terminate a single process tree by PID and refresh the display."""
-        terminate_process_tree(pid)
+        _, denied_pids = terminate_process_tree(pid)
         self._refresh_process_info()
+        if denied_pids:
+            self._offer_uac_elevation(
+                reason="Windows denied permission while trying to terminate the selected process tree.",
+            )
 
     def _row_has_children(self, table: QTableWidget, row_idx: int) -> bool:
         """Return cached child-process info for a row, defaulting to False."""
@@ -745,6 +757,46 @@ class MainWindow(QMainWindow):
         """Show a styled in-app modal dialog for status and report messages."""
         dialog = NotificationDialog(self, title, text, icon)
         dialog.exec()
+
+    def _offer_uac_elevation(self, *, reason: str) -> None:
+        """Offer to relaunch this app with elevation when an action is denied."""
+        if is_running_as_admin():
+            self._popup(
+                "Permissions required",
+                f"{reason}\n\nThe app is already running as administrator.",
+                QMessageBox.Icon.Warning,
+            )
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Administrator privileges required",
+            (
+                f"{reason}\n\n"
+                "Would you like to relaunch this app as administrator now?"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        if request_self_elevation():
+            if is_debug_session():
+                self.status_label.setText(
+                    "Elevation requested in debug mode. Keep this window open; close it manually after elevated app is stable.",
+                )
+                return
+
+            self.status_label.setText("Elevation requested. Closing this window in favor of elevated instance.")
+            self.close()
+            return
+
+        self._popup(
+            "Elevation failed",
+            "Could not request administrator privileges from Windows.",
+            QMessageBox.Icon.Warning,
+        )
 
     def _show_process_report(
         self,
@@ -860,6 +912,10 @@ class MainWindow(QMainWindow):
                 f"Restart partial: closed {len(stopped_known)}, started {len(started_known)}, denied {len(denied_known)}.",
             )
             self._show_process_report("Restart partial", QMessageBox.Icon.Warning, report_sections)
+            if denied_known:
+                self._offer_uac_elevation(
+                    reason="Windows denied permission while trying to restart AMD Adrenalin.",
+                )
             return
 
         self.status_label.setText(
@@ -1032,6 +1088,9 @@ class MainWindow(QMainWindow):
                 f"Stop partial: closed {len(stopped_known)}, denied {len(denied_known)}.",
             )
             self._show_process_report("Stop partial", QMessageBox.Icon.Warning, report_sections)
+            self._offer_uac_elevation(
+                reason="Windows denied permission while trying to stop AMD Adrenalin.",
+            )
             return
 
         if stopped_pids:
@@ -1243,6 +1302,9 @@ class MainWindow(QMainWindow):
                 f"Stopped {stopped_count} AMD process(es), {denied_count} denied by permissions.",
             )
             self._show_process_report("Stop All partial", QMessageBox.Icon.Warning, report_sections)
+            self._offer_uac_elevation(
+                reason="Windows denied permission while trying to stop one or more AMD processes.",
+            )
             return
 
         self.status_label.setText(f"Stopped {stopped_count} monitored AMD process(es).")
