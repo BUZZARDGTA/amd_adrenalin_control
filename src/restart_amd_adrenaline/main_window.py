@@ -1,11 +1,12 @@
 """Main application window and UI behavior."""
 
 import contextlib
+import threading
 import time
 
 import psutil
 from PyQt6.QtCore import QCoreApplication, QPoint, Qt, QTimer
-from PyQt6.QtGui import QAction, QColor, QKeySequence
+from PyQt6.QtGui import QAction, QCloseEvent, QColor, QKeySequence
 from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
@@ -28,8 +29,9 @@ from ._stylesheet import MAIN_STYLESHEET
 from .constants import COMPANION_NAMES, RADEON_SOFTWARE_PATH, SERVICE_NAMES, STATUS_COLORS
 from .dialogs import NotificationDialog, ProcessReportDialog
 from .process_ops import get_pid_by_path, launch_detached, terminate_process_tree
+from .refresh_snapshot import RefreshBridge, collect_refresh_snapshot
 from .uac import is_debug_session, is_running_as_admin, request_self_elevation
-from .ui_helpers import copy_selected_cells, copy_selected_rows, require_qheader_view, require_str
+from .ui_helpers import copy_selected_cells, copy_selected_rows, require_qheader_view
 
 PATH_COLUMN_INDEX = 1
 PID_COLUMN_INDEX = 2
@@ -71,6 +73,11 @@ class MainWindow(QMainWindow):
         )
         self._process_tables = [self.managed_table, self.companion_table, self.service_table]
 
+        self._refresh_bridge = RefreshBridge(self)
+        self._refresh_bridge.snapshot_ready.connect(self._apply_refresh_snapshot)  # pyright: ignore[reportUnknownMemberType]
+        self._refresh_in_flight = False
+        self._refresh_pending = False
+
         self._build_ui()
 
         self._timer = QTimer(self)
@@ -78,6 +85,10 @@ class MainWindow(QMainWindow):
         self._timer.timeout.connect(self._refresh_process_info)  # pyright: ignore[reportUnknownMemberType]
         self._timer.start()
         self._refresh_process_info()
+
+    def closeEvent(self, a0: QCloseEvent | None) -> None:  # noqa: N802  # pylint: disable=invalid-name
+        """Handle window close and let daemon refresh worker exit naturally."""
+        super().closeEvent(a0)
 
     def _build_ui(self) -> None:
         """Construct and lay out all widgets in the main window."""
@@ -263,17 +274,6 @@ class MainWindow(QMainWindow):
         section_layout.addWidget(table)
         return section, table
 
-    def _process_tooltip(self, proc: psutil.Process) -> str:
-        """Return a tooltip describing the process executable path."""
-        try:
-            exe_path = proc.exe()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            return "Executable path unavailable"
-
-        if not exe_path:
-            return "Executable path unavailable"
-        return exe_path
-
     def _resize_process_table(self, table: QTableWidget) -> None:
         """Fit a process table to its rows so stacked sections stay compact."""
         header_height = require_qheader_view(table.horizontalHeader(), "horizontal header").height()
@@ -284,53 +284,45 @@ class MainWindow(QMainWindow):
     def _populate_process_table(
         self,
         table: QTableWidget,
-        processes: list[tuple[psutil.Process, int]],
+        rows: list[dict[str, object]],
         *,
         muted: bool = False,
     ) -> None:
-        """Populate a process table with the supplied rows."""
-        table.setRowCount(len(processes))
+        """Populate a process table from plain row snapshots."""
+        table.setUpdatesEnabled(False)
+        table.setRowCount(len(rows))
 
-        for row_idx, (proc, indent) in enumerate(processes):
-            try:
-                prefix = "  └  " if indent > 0 else ""
-                name = prefix + proc.name()
-                path = self._process_tooltip(proc)
-                p = str(proc.pid)
-                cpu = f"{proc.cpu_percent(interval=None):.1f} %"
-                mem_mb = proc.memory_info().rss / (1024 * 1024)
-                mem = f"{mem_mb:.1f} MB"
-                status = require_str(proc.status(), "process status")
-            except psutil.NoSuchProcess:
-                name, path, p, cpu, mem, status = "<ended>", "<unavailable>", "-", "-", "-", "gone"
+        aligns = [
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+            Qt.AlignmentFlag.AlignCenter,
+        ]
 
-            values = [name, path, p, cpu, mem, status]
-            aligns = [
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-                Qt.AlignmentFlag.AlignCenter,
-            ]
-            row_bg = (
-                QColor("#111827")
-                if row_idx % 2 == EVEN_ROW_REMAINDER
-                else QColor("#0d1220")
-            )
+        for row_idx, row in enumerate(rows):
+            name = str(row["name"])
+            path_text = str(row["path"])
+            pid_text = str(row["pid_text"])
+            cpu_text = str(row["cpu_text"])
+            mem_text = str(row["mem_text"])
+            status = str(row["status"])
+            pid_value = row["pid_value"]
+            indent_raw = row["indent"]
+            indent = indent_raw if isinstance(indent_raw, int) else 0
+
+            values = [name, path_text, pid_text, cpu_text, mem_text, status]
+            row_bg = QColor("#111827") if row_idx % 2 == EVEN_ROW_REMAINDER else QColor("#0d1220")
+
             for col, (val, align) in enumerate(zip(values, aligns, strict=True)):
                 item = QTableWidgetItem(val)
                 item.setTextAlignment(align)
                 item.setBackground(row_bg)
                 if col == PATH_COLUMN_INDEX:
-                    item.setToolTip(self._process_tooltip(proc))
-                if col == NAME_COLUMN_INDEX:
-                    item.setData(Qt.ItemDataRole.UserRole, proc.pid)
-                    with contextlib.suppress(psutil.Error):
-                        item.setData(
-                            Qt.ItemDataRole.UserRole + 1,
-                            len(proc.children(recursive=False)) > 0,
-                        )
+                    item.setToolTip(path_text)
+                if col == NAME_COLUMN_INDEX and isinstance(pid_value, int):
+                    item.setData(Qt.ItemDataRole.UserRole, pid_value)
                 if col == STATUS_COLUMN_INDEX:
                     item.setForeground(QColor(STATUS_COLORS.get(status, "#94a3b8")))
                 elif muted or indent > 0:
@@ -338,12 +330,13 @@ class MainWindow(QMainWindow):
                 table.setItem(row_idx, col, item)
 
         self._resize_process_table(table)
+        table.setUpdatesEnabled(True)
 
     def _update_process_section(
         self,
         section: QWidget,
         table: QTableWidget,
-        processes: list[tuple[psutil.Process, int]],
+        processes: list[dict[str, object]],
         *,
         muted: bool = False,
     ) -> None:
@@ -431,13 +424,14 @@ class MainWindow(QMainWindow):
             )
 
     def _row_has_children(self, table: QTableWidget, row_idx: int) -> bool:
-        """Return cached child-process info for a row, defaulting to False."""
-        name_item = table.item(row_idx, NAME_COLUMN_INDEX)
-        if name_item is None:
+        """Check whether the process for a row currently has direct children."""
+        pid = self._process_pid_from_row(table, row_idx)
+        if pid is None:
             return False
 
-        has_children = name_item.data(Qt.ItemDataRole.UserRole + 1)
-        return bool(has_children)
+        with contextlib.suppress(psutil.Error):
+            return len(psutil.Process(pid).children(recursive=False)) > 0
+        return False
 
     def _confirm_terminate(self, *, pid: int, tree: bool) -> bool:
         """Ask user to confirm terminate action."""
@@ -749,57 +743,6 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"Started {len(started_known)} AMD Adrenalin process(es).")
         self._show_process_report("Started", QMessageBox.Icon.Information, report_sections)
 
-    def _collect_running_processes(self) -> dict[int, psutil.Process]:
-        """Collect running processes keyed by PID and warm up CPU counters."""
-        all_procs: dict[int, psutil.Process] = {}
-        for proc in psutil.process_iter(["pid", "name"]):
-            try:
-                all_procs[proc.pid] = proc
-                proc.cpu_percent(interval=None)
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                pass
-        return all_procs
-
-    def _build_managed_rows(self, pid: int | None) -> tuple[list[tuple[psutil.Process, int]], set[int]]:
-        """Build rows for the main managed process and its children."""
-        if pid is None:
-            return [], set()
-
-        try:
-            parent = psutil.Process(pid)
-            children = parent.children(recursive=True)
-        except psutil.NoSuchProcess:
-            return [], set()
-
-        main_rows = [(parent, 0)] + [(child, 1) for child in children]
-        managed_pids = {proc.pid for proc, _ in main_rows}
-        return main_rows, managed_pids
-
-    def _split_companion_and_service_rows(
-        self,
-        all_procs: dict[int, psutil.Process],
-        managed_pids: set[int],
-    ) -> tuple[list[psutil.Process], list[psutil.Process]]:
-        """Return companion and service process lists excluding managed rows."""
-        companion_rows: list[psutil.Process] = []
-        service_rows: list[psutil.Process] = []
-
-        for proc in all_procs.values():
-            if proc.pid in managed_pids:
-                continue
-            try:
-                name_lower = proc.name().lower()
-                if name_lower in COMPANION_NAMES:
-                    companion_rows.append(proc)
-                elif name_lower in SERVICE_NAMES:
-                    service_rows.append(proc)
-            except psutil.NoSuchProcess:
-                pass
-
-        companion_rows.sort(key=lambda proc: proc.name().lower())
-        service_rows.sort(key=lambda proc: proc.name().lower())
-        return companion_rows, service_rows
-
     def _set_monitor_badge(self, *, is_running: bool) -> None:
         """Update the monitor badge text and style based on running state."""
         if is_running:
@@ -810,27 +753,59 @@ class MainWindow(QMainWindow):
             self.status_badge.setObjectName("badge_stopped")
         self.status_badge.setStyle(self.status_badge.style())
 
+    def _schedule_refresh(self) -> None:
+        """Schedule a process snapshot refresh without blocking the UI thread."""
+        if self._refresh_in_flight:
+            self._refresh_pending = True
+            return
+
+        self._refresh_in_flight = True
+        worker = threading.Thread(
+            target=self._run_refresh_worker,
+            args=(str(self.process_path),),
+            daemon=True,
+            name="proc-refresh",
+        )
+        worker.start()
+
+    def _run_refresh_worker(self, process_path: str) -> None:
+        """Collect a refresh snapshot in a worker thread and emit it to the GUI thread."""
+        try:
+            snapshot = collect_refresh_snapshot(process_path)
+        except (RuntimeError, ValueError, TypeError, psutil.Error, OSError) as exc:
+            self._refresh_bridge.snapshot_ready.emit({"error": str(exc)})
+            return
+
+        self._refresh_bridge.snapshot_ready.emit(snapshot)
+
+    def _apply_refresh_snapshot(self, snapshot: object) -> None:
+        """Apply worker-produced refresh data on the GUI thread."""
+        self._refresh_in_flight = False
+
+        if isinstance(snapshot, dict) and "error" not in snapshot:
+            is_running = bool(snapshot.get("is_running", False))
+            managed_rows = snapshot.get("managed_rows", [])
+            companion_rows = snapshot.get("companion_rows", [])
+            service_rows = snapshot.get("service_rows", [])
+
+            if isinstance(managed_rows, list) and isinstance(companion_rows, list) and isinstance(service_rows, list):
+                self._set_monitor_badge(is_running=is_running)
+                self._update_process_section(self.managed_section, self.managed_table, managed_rows)
+                self._update_process_section(self.companion_section, self.companion_table, companion_rows)
+                self._update_process_section(
+                    self.service_section,
+                    self.service_table,
+                    service_rows,
+                    muted=True,
+                )
+
+        if self._refresh_pending:
+            self._refresh_pending = False
+            self._schedule_refresh()
+
     def _refresh_process_info(self) -> None:
-        """Query running processes and update the live process tables."""
-        pid = get_pid_by_path(self.process_path)
-
-        all_procs = self._collect_running_processes()
-        main_rows, managed_pids = self._build_managed_rows(pid)
-        companion_rows, service_rows = self._split_companion_and_service_rows(all_procs, managed_pids)
-        self._set_monitor_badge(is_running=bool(main_rows))
-
-        self._update_process_section(self.managed_section, self.managed_table, main_rows)
-        self._update_process_section(
-            self.companion_section,
-            self.companion_table,
-            [(proc, 0) for proc in companion_rows],
-        )
-        self._update_process_section(
-            self.service_section,
-            self.service_table,
-            [(proc, 0) for proc in service_rows],
-            muted=True,
-        )
+        """Request an asynchronous monitor refresh."""
+        self._schedule_refresh()
 
     def stop_only(self) -> None:
         """Terminate the running Radeon Software process tree."""
