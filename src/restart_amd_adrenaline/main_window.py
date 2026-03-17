@@ -194,6 +194,9 @@ class MainWindow(QMainWindow):
 
     def _configure_process_table_interactions(self, table: QTableWidget) -> None:
         """Enable row selection, copy, and row context menu actions."""
+        table.setMouseTracking(True)
+        if viewport := table.viewport():
+            viewport.setMouseTracking(True)
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)

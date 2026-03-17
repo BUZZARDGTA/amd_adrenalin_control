@@ -69,9 +69,17 @@ QTableWidget#process_table::item {
     padding: 6px 10px;
     border: none;
 }
+QTableWidget#process_table::item:hover {
+    background-color: #233a5d;
+    color: #f4f8ff;
+}
 QTableWidget#process_table::item:selected {
     background-color: #1c2e4a;
     color: #e9eef8;
+}
+QTableWidget#process_table::item:selected:hover {
+    background-color: #294874;
+    color: #f4f8ff;
 }
 QHeaderView::section {
     background-color: #141c2e;
