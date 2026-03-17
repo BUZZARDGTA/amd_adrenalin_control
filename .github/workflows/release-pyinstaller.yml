@@ -27,9 +27,12 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
+      - name: Generate Windows version metadata
+        run: python .github/workflows/scripts/generate_version_info.py
+
       - name: Build EXE with PyInstaller
         run: |
-          pyinstaller --noconfirm --clean --onefile --windowed --name amd-adrenalin-control main.py
+          pyinstaller --noconfirm --clean --onefile --windowed --version-file .github/workflows/version_info.txt --name amd-adrenalin-control main.py
 
       - name: Upload artifact to release
         uses: softprops/action-gh-release@v2

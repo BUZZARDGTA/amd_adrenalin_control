@@ -32,3 +32,6 @@ Thumbs.db
 # Local development assets
 .dev/
 amd-adrenalin-control.exe
+
+# Generated build files
+.github/workflows/version_info.txt
