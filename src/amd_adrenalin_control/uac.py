@@ -11,8 +11,8 @@ _SHELL_EXECUTE_SUCCESS_MIN = 32
 
 
 def is_running_as_admin() -> bool:
-    """Return True when the current process has administrator privileges on Windows."""
-    if os.name != "nt":
+    """Check whether Windows admin privileges are active."""
+    if os.name != 'nt':
         return False
 
     token_handle = wintypes.HANDLE()
@@ -27,10 +27,11 @@ def is_running_as_admin() -> bool:
     if not opened:
         return False
 
-    class TokenElevation(ctypes.Structure):  # pylint: disable=too-few-public-methods
+    # pylint: disable-next=too-few-public-methods
+    class TokenElevation(ctypes.Structure):
         """Maps to the Windows TOKEN_ELEVATION struct."""
 
-        _fields_ = [("TokenIsElevated", wintypes.DWORD)]
+        _fields_ = [('TokenIsElevated', wintypes.DWORD)]
 
     elevation = TokenElevation()
     return_length = wintypes.DWORD(0)
@@ -51,15 +52,15 @@ def is_running_as_admin() -> bool:
 
 
 def request_self_elevation() -> bool:
-    """Attempt to relaunch this Python process with a UAC elevation prompt on Windows."""
-    if os.name != "nt":
+    """Attempt to relaunch this Py process with a UAC elevation prompt on Windows."""
+    if os.name != 'nt':
         return False
 
     executable = _resolve_windows_python_executable()
     params = subprocess.list2cmdline(_build_elevated_argv())
     result = ctypes.windll.shell32.ShellExecuteW(
         None,
-        "runas",
+        'runas',
         executable,
         params,
         str(Path.cwd()),
@@ -75,18 +76,19 @@ def _build_elevated_argv() -> list[str]:
     if entry_script is not None:
         return [str(entry_script)]
 
-    # Fallback: preserve the previous debugpy-aware behavior if entry script is not found.
-    if "--" in sys.argv:
-        split_idx = sys.argv.index("--")
+    # Fallback: preserve the previous debugpy-aware
+    # behavior if entry script is not found.
+    if '--' in sys.argv:
+        split_idx = sys.argv.index('--')
         target_argv = sys.argv[split_idx + 1:]
         if target_argv:
             return target_argv
 
     if sys.argv:
         first = Path(sys.argv[0])
-        if first.name.lower() == "launcher" and len(sys.argv) > 1:
+        if first.name.lower() == 'launcher' and len(sys.argv) > 1:
             possible_script = Path(sys.argv[-1])
-            if possible_script.suffix.lower() == ".py":
+            if possible_script.suffix.lower() == '.py':
                 return [str(possible_script)]
 
     return sys.argv
@@ -96,7 +98,7 @@ def _resolve_entry_script() -> Path | None:
     """Resolve the repository entrypoint script for elevated relaunch."""
     repo_root = Path(__file__).resolve().parents[2]
 
-    main_script = repo_root / "main.py"
+    main_script = repo_root / 'main.py'
     if main_script.exists():
         return main_script
     return None
@@ -105,7 +107,7 @@ def _resolve_entry_script() -> Path | None:
 def _resolve_windows_python_executable() -> str:
     """Prefer pythonw.exe on Windows to avoid opening an extra console window."""
     current = Path(sys.executable)
-    pythonw = current.with_name("pythonw.exe")
+    pythonw = current.with_name('pythonw.exe')
     if pythonw.exists():
         return str(pythonw)
     return str(current)
@@ -117,4 +119,4 @@ def is_debug_session() -> bool:
         return True
 
     lowered_argv = [arg.lower() for arg in sys.argv]
-    return any("debugpy" in arg for arg in lowered_argv)
+    return any('debugpy' in arg for arg in lowered_argv)

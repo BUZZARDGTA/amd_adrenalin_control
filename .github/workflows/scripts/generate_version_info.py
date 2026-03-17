@@ -43,17 +43,24 @@ VSVersionInfo(
 )
 """
 
-VERSION_PATTERN = re.compile(r'^version\s*=\s*"(?P<version>[0-9]+\.[0-9]+\.[0-9]+)"\s*$', re.MULTILINE)
+VERSION_PATTERN = re.compile(
+    r'^version\s*=\s*"(?P<version>[0-9]+\.[0-9]+\.[0-9]+)"\s*$',
+    re.MULTILINE,
+)
 
 
 def read_version(pyproject_path: Path) -> Version:
     """Read the project version string from pyproject.toml."""
-    content = pyproject_path.read_text(encoding="utf-8")
+    content = pyproject_path.read_text(encoding='utf-8')
     match = VERSION_PATTERN.search(content)
     if not match:
-        print(f"ERROR: Could not find a valid version in {pyproject_path}", file=sys.stderr)
+        print(
+            f'ERROR: Could not find a valid version '
+            f'in {pyproject_path}',
+            file=sys.stderr,
+        )
         sys.exit(1)
-    return Version(match.group("version"))
+    return Version(match.group('version'))
 
 
 def generate(version: Version, output_path: Path) -> None:
@@ -65,25 +72,30 @@ def generate(version: Version, output_path: Path) -> None:
         version=version,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(content, encoding="utf-8")
-    print(f"Generated version info for v{version} -> {output_path}")
+    output_path.write_text(content, encoding='utf-8')
+    print(f'Generated version info for v{version} -> {output_path}')
 
 
 def main() -> None:
     """Parse arguments and generate the version-info file."""
-    parser = argparse.ArgumentParser(description="Generate PyInstaller version-info from pyproject.toml")
+    parser = argparse.ArgumentParser(
+        description=(
+            'Generate PyInstaller version-info'
+            ' from pyproject.toml'
+        ),
+    )
     parser.add_argument(
-        "-o", "--output",
+        '-o', '--output',
         type=Path,
-        default=REPO_ROOT / ".github" / "workflows" / "version_info.txt",
-        help="Output path for the generated version-info file",
+        default=REPO_ROOT / '.github' / 'workflows' / 'version_info.txt',
+        help='Output path for the generated version-info file',
     )
     args = parser.parse_args()
 
-    pyproject_path = REPO_ROOT / "pyproject.toml"
+    pyproject_path = REPO_ROOT / 'pyproject.toml'
     version = read_version(pyproject_path)
     generate(version, args.output)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

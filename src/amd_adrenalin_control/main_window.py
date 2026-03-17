@@ -25,14 +25,30 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from ._report_helpers import build_stop_all_report_sections, capture_process_info, to_report_entry
+from . import __version__
+from ._report_helpers import (
+    build_stop_all_report_sections,
+    capture_process_info,
+    to_report_entry,
+)
 from ._stylesheet import MAIN_STYLESHEET
-from .constants import COMPANION_NAMES, PROCESS_TOOLTIPS, RADEON_SOFTWARE_PATH, SERVICE_NAMES, STATUS_COLORS
+from .constants import (
+    COMPANION_NAMES,
+    PROCESS_TOOLTIPS,
+    RADEON_SOFTWARE_PATH,
+    SERVICE_NAMES,
+    STATUS_COLORS,
+)
 from .dialogs import NotificationDialog, ProcessReportDialog
 from .process_ops import get_pid_by_path, launch_detached, terminate_process_tree
 from .refresh_snapshot import RefreshBridge, collect_refresh_snapshot
 from .uac import is_debug_session, is_running_as_admin, request_self_elevation
-from .ui_helpers import COPY_TEXT_ROLE, copy_selected_cells, copy_selected_rows, require_qheader_view
+from .ui_helpers import (
+    COPY_TEXT_ROLE,
+    copy_selected_cells,
+    copy_selected_rows,
+    require_qheader_view,
+)
 
 PATH_COLUMN_INDEX = 1
 PID_COLUMN_INDEX = 2
@@ -49,33 +65,42 @@ class MainWindow(QMainWindow):
         """Initialise the main window, build the UI, and start the refresh timer."""
         super().__init__()
         self.process_path = RADEON_SOFTWARE_PATH
-        self.setWindowTitle("AMD Adrenalin Control")
+        self.setWindowTitle(f'AMD Adrenalin Control v{__version__}')
         self.setMinimumSize(990, 765)
         self.resize(1130, 885)
 
-        self.status_label = QLabel("Monitoring Radeon Software and related AMD processes.", self)
-        self.path_label = QLabel(f"Path: {self.process_path}", self)
-        self.status_badge = QLabel("● NOT RUNNING", self)
-        self.status_badge.setObjectName("badge_stopped")
+        self.status_label = QLabel('', self)
+        self.status_label.hide()
+        self.status_badge = QLabel('● NOT RUNNING', self)
+        self.status_badge.setObjectName('badge_stopped')
         self.managed_section, self.managed_table = self._create_process_section(
             self,
-            "Radeon Software Managed",
-            "Main RadeonSoftware.exe process and any child processes spawned from it.",
+            'Radeon Software Managed',
+            'Main RadeonSoftware.exe process and any child processes spawned from it.',
         )
         self.companion_section, self.companion_table = self._create_process_section(
             self,
-            "AMD Companion Processes",
-            "Supporting user-space AMD helper executables that assist telemetry and features.",
+            'AMD Companion Processes',
+            'Supporting user-space AMD helper executables'
+            ' that assist telemetry and features.',
         )
         self.service_section, self.service_table = self._create_process_section(
             self,
-            "AMD System Services",
-            "Background service executables that provide driver and system-level AMD functionality.",
+            'AMD System Services',
+            'Background service executables that provide'
+            ' driver and system-level AMD functionality.',
         )
-        self._process_tables = [self.managed_table, self.companion_table, self.service_table]
+        self._process_tables = [
+            self.managed_table,
+            self.companion_table,
+            self.service_table,
+        ]
 
         self._refresh_bridge = RefreshBridge(self)
-        self._refresh_bridge.snapshot_ready.connect(self._apply_refresh_snapshot)  # pyright: ignore[reportUnknownMemberType]
+        _ready = self._refresh_bridge.snapshot_ready
+        _ready.connect(  # pyright: ignore[reportUnknownMemberType]
+            self._apply_refresh_snapshot,
+        )
         self._refresh_in_flight = False
         self._refresh_pending = False
 
@@ -83,18 +108,23 @@ class MainWindow(QMainWindow):
 
         self._timer = QTimer(self)
         self._timer.setInterval(2000)
-        self._timer.timeout.connect(self._refresh_process_info)  # pyright: ignore[reportUnknownMemberType]
+        self._timer.timeout.connect(  # pyright: ignore[reportUnknownMemberType]
+            self._refresh_process_info,
+        )
         self._timer.start()
         self._refresh_process_info()
 
-    def closeEvent(self, a0: QCloseEvent | None) -> None:  # noqa: N802  # pylint: disable=invalid-name
+    def closeEvent(  # noqa: N802  # pylint: disable=invalid-name
+        self,
+        a0: QCloseEvent | None,
+    ) -> None:
         """Handle window close and let daemon refresh worker exit naturally."""
         super().closeEvent(a0)
 
     def _build_ui(self) -> None:
         """Construct and lay out all widgets in the main window."""
         central = QWidget(self)
-        central.setObjectName("central_widget")
+        central.setObjectName('central_widget')
         layout = QGridLayout(central)
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setHorizontalSpacing(12)
@@ -110,67 +140,78 @@ class MainWindow(QMainWindow):
 
     def _build_top_controls(self, layout: QGridLayout) -> None:
         """Build status labels and top action buttons."""
-        self.status_label.setWordWrap(True)
-        self.path_label.setWordWrap(True)
-
-        restart_btn = QPushButton("Restart Adrenalin", self)
+        restart_btn = QPushButton('Restart Adrenalin', self)
         restart_btn.setMinimumHeight(40)
-        restart_btn.setToolTip("Stops Radeon Software if running, then starts a fresh instance.")
-        restart_btn.clicked.connect(self.restart_software)  # pyright: ignore[reportUnknownMemberType]
-
-        start_btn = QPushButton("Start Adrenalin", self)
-        start_btn.setMinimumHeight(40)
-        start_btn.setObjectName("start_btn")
-        start_btn.setToolTip("Starts Radeon Software if it is not already running.")
-        start_btn.clicked.connect(self.start_only)  # pyright: ignore[reportUnknownMemberType]
-
-        stop_btn = QPushButton("Stop Adrenalin", self)
-        stop_btn.setMinimumHeight(40)
-        stop_btn.setObjectName("stop_btn")
-        stop_btn.setToolTip("Stops the main Radeon Software process and its child processes.")
-        stop_btn.clicked.connect(self.stop_only)  # pyright: ignore[reportUnknownMemberType]
-
-        stop_all_btn = QPushButton("Stop all AMD processes", self)
-        stop_all_btn.setMinimumHeight(38)
-        stop_all_btn.setObjectName("stop_all_btn")
-        stop_all_btn.setToolTip(
-            "Stops Radeon Software and all monitored AMD helper/service processes, including their child processes.",
+        restart_btn.setToolTip(
+            'Stops Radeon Software if running,'
+            ' then starts a fresh instance.',
         )
-        stop_all_btn.clicked.connect(self.stop_all)  # pyright: ignore[reportUnknownMemberType]
+        restart_btn.clicked.connect(  # pyright: ignore[reportUnknownMemberType]
+            self.restart_software,
+        )
 
-        layout.addWidget(self.status_label, 0, 0, 1, 3)
-        layout.addWidget(self.path_label, 1, 0, 1, 3)
-        layout.addWidget(restart_btn, 2, 0)
-        layout.addWidget(start_btn, 2, 1)
-        layout.addWidget(stop_btn, 2, 2)
-        layout.addWidget(stop_all_btn, 3, 0, 1, 3)
+        start_btn = QPushButton('Start Adrenalin', self)
+        start_btn.setMinimumHeight(40)
+        start_btn.setObjectName('start_btn')
+        start_btn.setToolTip('Starts Radeon Software if it is not already running.')
+        start_btn.clicked.connect(  # pyright: ignore[reportUnknownMemberType]
+            self.start_only,
+        )
+
+        stop_btn = QPushButton('Stop Adrenalin', self)
+        stop_btn.setMinimumHeight(40)
+        stop_btn.setObjectName('stop_btn')
+        stop_btn.setToolTip(
+            'Stops the main Radeon Software process'
+            ' and its child processes.',
+        )
+        stop_btn.clicked.connect(  # pyright: ignore[reportUnknownMemberType]
+            self.stop_only,
+        )
+
+        stop_all_btn = QPushButton('Stop all AMD processes', self)
+        stop_all_btn.setMinimumHeight(38)
+        stop_all_btn.setObjectName('stop_all_btn')
+        stop_all_btn.setToolTip(
+            'Stops Radeon Software and all monitored'
+            ' AMD helper/service processes,'
+            ' including their child processes.',
+        )
+        stop_all_btn.clicked.connect(  # pyright: ignore[reportUnknownMemberType]
+            self.stop_all,
+        )
+
+        layout.addWidget(restart_btn, 0, 0)
+        layout.addWidget(start_btn, 0, 1)
+        layout.addWidget(stop_btn, 0, 2)
+        layout.addWidget(stop_all_btn, 1, 0, 1, 3)
 
     def _build_monitor_header(self, layout: QGridLayout) -> None:
         """Build the live monitor heading and status badge row."""
         monitor_header = QWidget(self)
-        monitor_header.setObjectName("monitor_header")
+        monitor_header.setObjectName('monitor_header')
         header_layout = QHBoxLayout(monitor_header)
         header_layout.setContentsMargins(0, 4, 0, 0)
         header_layout.setSpacing(10)
 
-        monitor_label = QLabel("Live Process Monitor", self)
-        monitor_label.setObjectName("monitor_label")
+        monitor_label = QLabel('Live Process Monitor', self)
+        monitor_label.setObjectName('monitor_label')
         header_layout.addWidget(monitor_label)
         header_layout.addWidget(self.status_badge)
         header_layout.addStretch()
-        layout.addWidget(monitor_header, 4, 0, 1, 3)
+        layout.addWidget(monitor_header, 2, 0, 1, 3)
 
     def _build_monitor_sections(self, layout: QGridLayout) -> None:
         """Build the process monitor scroll area and section tables."""
         monitor_scroll = QScrollArea(self)
-        monitor_scroll.setObjectName("monitor_scroll")
+        monitor_scroll.setObjectName('monitor_scroll')
         monitor_scroll.setWidgetResizable(True)
         monitor_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         if viewport := monitor_scroll.viewport():
-            viewport.setObjectName("monitor_viewport")
+            viewport.setObjectName('monitor_viewport')
 
         monitor_content = QWidget(monitor_scroll)
-        monitor_content.setObjectName("monitor_content")
+        monitor_content.setObjectName('monitor_content')
         monitor_layout = QVBoxLayout(monitor_content)
         monitor_layout.setContentsMargins(0, 0, 0, 0)
         monitor_layout.setSpacing(14)
@@ -181,7 +222,7 @@ class MainWindow(QMainWindow):
         monitor_layout.addStretch()
 
         monitor_scroll.setWidget(monitor_content)
-        layout.addWidget(monitor_scroll, 5, 0, 1, 3)
+        layout.addWidget(monitor_scroll, 3, 0, 1, 3)
 
     def _apply_stylesheet(self) -> None:
         """Apply the main window stylesheet."""
@@ -203,8 +244,12 @@ class MainWindow(QMainWindow):
         table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
         table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        table.customContextMenuRequested.connect(  # pyright: ignore[reportUnknownMemberType]
-            lambda pos, current_table=table: self._show_process_context_menu(current_table, pos),
+        _ctx_signal = table.customContextMenuRequested
+        _ctx_signal.connect(  # pyright: ignore[reportUnknownMemberType]
+            lambda pos, current_table=table:
+                self._show_process_context_menu(
+                    current_table, pos,
+                ),
         )
 
         copy_action = QAction(table)
@@ -215,7 +260,10 @@ class MainWindow(QMainWindow):
         )
         table.addAction(copy_action)
         table.itemSelectionChanged.connect(  # pyright: ignore[reportUnknownMemberType]
-            lambda current_table=table: self._enforce_single_table_selection(current_table),
+            lambda current_table=table:
+                self._enforce_single_table_selection(
+                    current_table,
+                ),
         )
 
     def _enforce_single_table_selection(self, active_table: QTableWidget) -> None:
@@ -238,7 +286,7 @@ class MainWindow(QMainWindow):
     ) -> tuple[QWidget, QTableWidget]:
         """Create a labeled process section with a dedicated table."""
         section = QWidget(parent)
-        section.setObjectName("process_section")
+        section.setObjectName('process_section')
         section.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
 
         section_layout = QVBoxLayout(section)
@@ -246,17 +294,19 @@ class MainWindow(QMainWindow):
         section_layout.setSpacing(8)
 
         label = QLabel(title, section)
-        label.setObjectName("section_header")
+        label.setObjectName('section_header')
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         description_label = QLabel(description, section)
-        description_label.setObjectName("section_description")
+        description_label.setObjectName('section_description')
         description_label.setWordWrap(True)
         description_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         table = QTableWidget(0, 6, section)
-        table.setObjectName("process_table")
-        table.setHorizontalHeaderLabels(["Name", "Path", "PID", "CPU %", "Memory", "Status"])  # pyright: ignore[reportUnknownMemberType]
+        table.setObjectName('process_table')
+        table.setHorizontalHeaderLabels(  # pyright: ignore[reportUnknownMemberType]
+            ['Name', 'Path', 'PID', 'CPU %', 'Memory', 'Status'],
+        )
         if h_header := table.horizontalHeader():
             h_header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
             h_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
@@ -286,10 +336,18 @@ class MainWindow(QMainWindow):
 
     def _resize_process_table(self, table: QTableWidget) -> None:
         """Fit a process table to its rows so stacked sections stay compact."""
-        header_height = require_qheader_view(table.horizontalHeader(), "horizontal header").height()
-        row_height = require_qheader_view(table.verticalHeader(), "vertical header").defaultSectionSize()
+        header_height = require_qheader_view(
+            table.horizontalHeader(), 'horizontal header',
+        ).height()
+        row_height = require_qheader_view(
+            table.verticalHeader(), 'vertical header',
+        ).defaultSectionSize()
         frame_height = table.frameWidth() * 2
-        table.setFixedHeight(header_height + (table.rowCount() * row_height) + frame_height)
+        table.setFixedHeight(
+            header_height
+            + (table.rowCount() * row_height)
+            + frame_height,
+        )
 
     def _populate_process_table(
         self,
@@ -312,19 +370,23 @@ class MainWindow(QMainWindow):
         ]
 
         for row_idx, row in enumerate(rows):
-            name = str(row["name"])
-            raw_name = str(row.get("raw_name", name))
-            path_text = str(row["path"])
-            pid_text = str(row["pid_text"])
-            cpu_text = str(row["cpu_text"])
-            mem_text = str(row["mem_text"])
-            status = str(row["status"])
-            pid_value = row["pid_value"]
-            indent_raw = row["indent"]
+            name = str(row['name'])
+            raw_name = str(row.get('raw_name', name))
+            path_text = str(row['path'])
+            pid_text = str(row['pid_text'])
+            cpu_text = str(row['cpu_text'])
+            mem_text = str(row['mem_text'])
+            status = str(row['status'])
+            pid_value = row['pid_value']
+            indent_raw = row['indent']
             indent = indent_raw if isinstance(indent_raw, int) else 0
 
             values = [name, path_text, pid_text, cpu_text, mem_text, status]
-            row_bg = QColor("#111827") if row_idx % 2 == EVEN_ROW_REMAINDER else QColor("#0d1220")
+            row_bg = (
+                QColor('#111827')
+                if row_idx % 2 == EVEN_ROW_REMAINDER
+                else QColor('#0d1220')
+            )
 
             for col, (val, align) in enumerate(zip(values, aligns, strict=True)):
                 item = QTableWidgetItem(val)
@@ -334,14 +396,18 @@ class MainWindow(QMainWindow):
                     item.setToolTip(path_text)
                 if col == NAME_COLUMN_INDEX:
                     item.setData(COPY_TEXT_ROLE, raw_name)
-                if col == NAME_COLUMN_INDEX and (tooltip := PROCESS_TOOLTIPS.get(raw_name.lower())):
+                if col == NAME_COLUMN_INDEX and (
+                    tooltip := PROCESS_TOOLTIPS.get(
+                        raw_name.lower(),
+                    )
+                ):
                     item.setToolTip(tooltip)
                 if col == NAME_COLUMN_INDEX and isinstance(pid_value, int):
                     item.setData(Qt.ItemDataRole.UserRole, pid_value)
                 if col == STATUS_COLUMN_INDEX:
-                    item.setForeground(QColor(STATUS_COLORS.get(status, "#94a3b8")))
+                    item.setForeground(QColor(STATUS_COLORS.get(status, '#94a3b8')))
                 elif muted or indent > 0:
-                    item.setForeground(QColor("#94a3b8"))
+                    item.setForeground(QColor('#94a3b8'))
                 table.setItem(row_idx, col, item)
 
         self._resize_process_table(table)
@@ -359,7 +425,7 @@ class MainWindow(QMainWindow):
         section.setVisible(True)
         if not processes:
             table.setRowCount(1)
-            empty_values = ["No active processes", "-", "-", "-", "-", "idle"]
+            empty_values = ['No active processes', '-', '-', '-', '-', 'idle']
             empty_aligns = [
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                 Qt.AlignmentFlag.AlignCenter,
@@ -368,11 +434,13 @@ class MainWindow(QMainWindow):
                 Qt.AlignmentFlag.AlignCenter,
                 Qt.AlignmentFlag.AlignCenter,
             ]
-            for col, (val, align) in enumerate(zip(empty_values, empty_aligns, strict=True)):
+            for col, (val, align) in enumerate(
+                zip(empty_values, empty_aligns, strict=True),
+            ):
                 item = QTableWidgetItem(val)
                 item.setTextAlignment(align)
-                item.setBackground(QColor("#0d1220"))
-                item.setForeground(QColor("#64748b"))
+                item.setBackground(QColor('#0d1220'))
+                item.setForeground(QColor('#64748b'))
                 table.setItem(0, col, item)
             self._resize_process_table(table)
             return
@@ -389,7 +457,11 @@ class MainWindow(QMainWindow):
             return pid_value
         return None
 
-    def _is_same_process_still_running(self, pid: int, target_create_time: float | None) -> bool:
+    def _is_same_process_still_running(
+        self,
+        pid: int,
+        target_create_time: float | None,
+    ) -> bool:
         """Return True if the original target process identity is still alive."""
         if target_create_time is None:
             with contextlib.suppress(psutil.Error):
@@ -398,14 +470,17 @@ class MainWindow(QMainWindow):
 
         with contextlib.suppress(psutil.Error):
             probe = psutil.Process(pid)
-            return abs(probe.create_time() - target_create_time) < PROCESS_CREATE_TIME_EPSILON
+            return (
+                abs(probe.create_time() - target_create_time)
+                < PROCESS_CREATE_TIME_EPSILON
+            )
         return False
 
     def _format_process_label(self, pid: int) -> str:
         """Build a display label as '<name> (PID n)' with PID fallback."""
-        process_label = f"PID {pid}"
+        process_label = f'PID {pid}'
         with contextlib.suppress(psutil.Error):
-            process_label = f"{psutil.Process(pid).name()} (PID {pid})"
+            process_label = f'{psutil.Process(pid).name()} (PID {pid})'
         return process_label
 
     def _capture_target_create_times(self, pids: set[int]) -> dict[int, float | None]:
@@ -437,7 +512,11 @@ class MainWindow(QMainWindow):
         """Split attempted pids into closed, denied, and already-gone groups."""
         stopped_known = [pid for pid in attempted_pids if pid in stopped_pids]
         denied_known = [pid for pid in attempted_pids if pid in denied_pids]
-        gone_known = [pid for pid in attempted_pids if pid not in stopped_pids and pid not in denied_pids]
+        gone_known = [
+            pid for pid in attempted_pids
+            if pid not in stopped_pids
+            and pid not in denied_pids
+        ]
         return stopped_known, denied_known, gone_known
 
     def _terminate_single_process(self, pid: int) -> None:
@@ -453,7 +532,10 @@ class MainWindow(QMainWindow):
             proc.terminate()
             proc.wait(timeout=3)
         except psutil.AccessDenied:
-            failure_reason = "Permission denied while terminating the process. Try running as administrator."
+            failure_reason = (
+                'Permission denied while terminating'
+                ' the process. Try running as administrator.'
+            )
             permission_denied = True
         except psutil.TimeoutExpired:
             try:
@@ -461,10 +543,16 @@ class MainWindow(QMainWindow):
                 proc.kill()
                 proc.wait(timeout=3)
             except psutil.AccessDenied:
-                failure_reason = "Permission denied while force-stopping the process. Try running as administrator."
+                failure_reason = (
+                    'Permission denied while force-stopping'
+                    ' the process. Try running as administrator.'
+                )
                 permission_denied = True
             except psutil.TimeoutExpired:
-                failure_reason = "The process did not exit after terminate and force-stop attempts."
+                failure_reason = (
+                    'The process did not exit after'
+                    ' terminate and force-stop attempts.'
+                )
             except psutil.NoSuchProcess:
                 pass
         except psutil.NoSuchProcess:
@@ -472,34 +560,51 @@ class MainWindow(QMainWindow):
 
         self._refresh_process_info()
 
-        # On Windows, transient AccessDenied/Timeout paths can still end with the target gone.
+        # On Windows, transient AccessDenied/Timeout paths
+        # can still end with the target gone.
         # Only report failure if the same original process is still running.
-        if failure_reason is not None and not self._is_same_process_still_running(pid, target_create_time):
+        if (
+            failure_reason is not None
+            and not self._is_same_process_still_running(
+                pid, target_create_time,
+            )
+        ):
             failure_reason = None
             permission_denied = False
-            self.status_label.setText(f"Terminated {process_label}.")
+            self.status_label.setText(f'Terminated {process_label}.')
 
         if failure_reason is not None:
-            self.status_label.setText(f"Failed to terminate {process_label}: {failure_reason}")
+            self.status_label.setText(
+                f'Failed to terminate {process_label}:'
+                f' {failure_reason}',
+            )
             self._popup(
-                "Terminate failed",
-                f"Could not terminate {process_label}.\n\nReason: {failure_reason}",
+                'Terminate failed',
+                f'Could not terminate {process_label}.\n\nReason: {failure_reason}',
                 QMessageBox.Icon.Warning,
             )
             if permission_denied:
                 self._offer_uac_elevation(
-                    reason="Windows denied permission while trying to terminate the selected process.",
+                    reason=(
+                        'Windows denied permission while trying'
+                        ' to terminate the selected process.'
+                    ),
                 )
 
     def _stop_single_process(self, pid: int) -> None:
         """Terminate a single process tree by PID and refresh the display."""
         target_create_times = self._capture_target_create_times({pid})
         _, denied_pids = terminate_process_tree(pid)
-        denied_pids = self._filter_denied_pids_still_running(denied_pids, target_create_times)
+        denied_pids = self._filter_denied_pids_still_running(
+            denied_pids, target_create_times,
+        )
         self._refresh_process_info()
         if denied_pids:
             self._offer_uac_elevation(
-                reason="Windows denied permission while trying to terminate the selected process tree.",
+                reason=(
+                    'Windows denied permission while trying'
+                    ' to terminate the selected process tree.'
+                ),
             )
 
     def _row_has_children(self, table: QTableWidget, row_idx: int) -> bool:
@@ -514,13 +619,26 @@ class MainWindow(QMainWindow):
 
     def _confirm_terminate(self, *, pid: int, tree: bool) -> bool:
         """Ask user to confirm terminate action."""
-        action_text = "terminate this process tree" if tree else "terminate this process"
-        detail = "This will stop the selected process and all child processes." if tree else "This will stop only the selected process."
+        action_text = (
+            'terminate this process tree'
+            if tree
+            else 'terminate this process'
+        )
+        detail = (
+            'This will stop the selected process'
+            ' and all child processes.'
+            if tree
+            else 'This will stop only the selected process.'
+        )
         process_label = self._format_process_label(pid)
         answer = QMessageBox.question(
             self,
-            "Confirm terminate",
-            f"Are you sure you want to {action_text}?\n\nProcess: {process_label}\n\n{detail}",
+            'Confirm terminate',
+            (
+                f'Are you sure you want to {action_text}?'
+                f'\n\nProcess: {process_label}'
+                f'\n\n{detail}'
+            ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -536,11 +654,11 @@ class MainWindow(QMainWindow):
         row_path: str | None = None,
     ) -> None:
         """Execute the selected process-row context menu action."""
-        copy_cells_action = actions["copy_cells"]
-        copy_rows_action = actions["copy_rows"]
-        open_location_action = actions.get("open_location")
-        terminate_process_action = actions["terminate_process"]
-        terminate_tree_action = actions["terminate_tree"]
+        copy_cells_action = actions['copy_cells']
+        copy_rows_action = actions['copy_rows']
+        open_location_action = actions.get('open_location')
+        terminate_process_action = actions['terminate_process']
+        terminate_tree_action = actions['terminate_tree']
 
         if chosen_action is None:
             return
@@ -553,8 +671,15 @@ class MainWindow(QMainWindow):
             copy_selected_rows(table)
             return
 
-        if open_location_action is not None and chosen_action == open_location_action and row_path is not None:
-            subprocess.run(["explorer", "/select,", row_path], check=False)  # noqa: S603 S607
+        if (
+            open_location_action is not None
+            and chosen_action == open_location_action
+            and row_path is not None
+        ):
+            subprocess.run(  # noqa: S603
+                ['explorer', '/select,', row_path],  # noqa: S607
+                check=False,
+            )
             return
 
         if (
@@ -588,33 +713,38 @@ class MainWindow(QMainWindow):
 
         pid = self._process_pid_from_row(table, row_idx)
         path_item = table.item(row_idx, PATH_COLUMN_INDEX)
-        row_path = path_item.text() if path_item is not None and path_item.text() not in ("-", "") else None
+        row_path = (
+            path_item.text()
+            if path_item is not None
+            and path_item.text() not in ('-', '')
+            else None
+        )
 
         menu = QMenu(table)
-        copy_cells_action = menu.addAction("Copy selected cells")
-        copy_rows_action = menu.addAction("Copy selected rows")
+        copy_cells_action = menu.addAction('Copy selected cells')
+        copy_rows_action = menu.addAction('Copy selected rows')
         open_location_action = None
         terminate_process_action = None
         terminate_tree_action = None
         if row_path is not None:
             menu.addSeparator()
-            open_location_action = menu.addAction("Open file location")
+            open_location_action = menu.addAction('Open file location')
         if pid is not None:
             menu.addSeparator()
-            terminate_process_action = menu.addAction("Terminate process")
+            terminate_process_action = menu.addAction('Terminate process')
             if self._row_has_children(table, row_idx):
-                terminate_tree_action = menu.addAction("Terminate process tree")
+                terminate_tree_action = menu.addAction('Terminate process tree')
         viewport = table.viewport()
         if viewport is None:
             return
 
         chosen_action = menu.exec(viewport.mapToGlobal(position))
         actions: dict[str, QAction | None] = {
-            "copy_cells": copy_cells_action,
-            "copy_rows": copy_rows_action,
-            "open_location": open_location_action,
-            "terminate_process": terminate_process_action,
-            "terminate_tree": terminate_tree_action,
+            'copy_cells': copy_cells_action,
+            'copy_rows': copy_rows_action,
+            'open_location': open_location_action,
+            'terminate_process': terminate_process_action,
+            'terminate_tree': terminate_tree_action,
         }
         self._handle_process_menu_action(
             chosen_action=chosen_action,
@@ -634,18 +764,18 @@ class MainWindow(QMainWindow):
         """Offer to relaunch this app with elevation when an action is denied."""
         if is_running_as_admin():
             self._popup(
-                "Permissions required",
-                f"{reason}\n\nThe app is already running as administrator.",
+                'Permissions required',
+                f'{reason}\n\nThe app is already running as administrator.',
                 QMessageBox.Icon.Warning,
             )
             return
 
         answer = QMessageBox.question(
             self,
-            "Administrator privileges required",
+            'Administrator privileges required',
             (
-                f"{reason}\n\n"
-                "Would you like to relaunch this app as administrator now?"
+                f'{reason}\n\n'
+                'Would you like to relaunch this app as administrator now?'
             ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes,
@@ -656,17 +786,22 @@ class MainWindow(QMainWindow):
         if request_self_elevation():
             if is_debug_session():
                 self.status_label.setText(
-                    "Elevation requested in debug mode. Keep this window open; close it manually after elevated app is stable.",
+                    'Elevation requested in debug mode.'
+                    ' Keep this window open; close it'
+                    ' manually after elevated app is stable.',
                 )
                 return
 
-            self.status_label.setText("Elevation requested. Closing this window in favor of elevated instance.")
+            self.status_label.setText(
+                'Elevation requested. Closing this window'
+                ' in favor of elevated instance.',
+            )
             self.close()
             return
 
         self._popup(
-            "Elevation failed",
-            "Could not request administrator privileges from Windows.",
+            'Elevation failed',
+            'Could not request administrator privileges from Windows.',
             QMessageBox.Icon.Warning,
         )
 
@@ -725,7 +860,12 @@ class MainWindow(QMainWindow):
 
         managed_pid = get_pid_by_path(self.process_path) if pid is None else pid
         if managed_pid is not None:
-            self._collect_process_tree_targets_for_pid(managed_pid, "Managed", target_categories, process_info)
+            self._collect_process_tree_targets_for_pid(
+                managed_pid,
+                'Managed',
+                target_categories,
+                process_info,
+            )
 
         return target_categories, process_info
 
@@ -743,10 +883,10 @@ class MainWindow(QMainWindow):
     def restart_software(self) -> None:
         """Stop any running instance of Radeon Software, then launch a fresh one."""
         if not self.process_path.exists():
-            self.status_label.setText("RadeonSoftware.exe path was not found.")
+            self.status_label.setText('RadeonSoftware.exe path was not found.')
             self._popup(
-                "Path not found",
-                f"Could not find executable at:\n{self.process_path}",
+                'Path not found',
+                f'Could not find executable at:\n{self.process_path}',
                 QMessageBox.Icon.Critical,
             )
             return
@@ -760,11 +900,15 @@ class MainWindow(QMainWindow):
             process_pid = attempted_pids[0]
             target_create_times = self._capture_target_create_times(set(attempted_pids))
             stopped_pids, denied_pids = terminate_process_tree(process_pid)
-            denied_pids = self._filter_denied_pids_still_running(denied_pids, target_create_times)
+            denied_pids = self._filter_denied_pids_still_running(
+                denied_pids, target_create_times,
+            )
 
         launch_detached(self.process_path)
         started_pid = self._wait_for_managed_process_start()
-        started_categories, started_info = self._collect_managed_report_data(started_pid)
+        started_categories, started_info = (
+            self._collect_managed_report_data(started_pid)
+        )
 
         stopped_known, denied_known, gone_known = self._classify_attempted_pids(
             attempted_pids,
@@ -776,80 +920,113 @@ class MainWindow(QMainWindow):
         report_sections = self._build_report_sections_from_pid_groups(
             before_info | started_info,
             [
-                ("Closed", stopped_known),
-                ("Could not close (permissions)", denied_known),
-                ("Already gone / ended during action", gone_known),
-                ("Started", started_known),
+                ('Closed', stopped_known),
+                ('Could not close (permissions)', denied_known),
+                ('Already gone / ended during action', gone_known),
+                ('Started', started_known),
             ],
         )
 
         if denied_known or not started_known:
             self.status_label.setText(
-                f"Restart partial: closed {len(stopped_known)}, started {len(started_known)}, denied {len(denied_known)}.",
+                f'Restart partial: closed {len(stopped_known)},'
+                f' started {len(started_known)},'
+                f' denied {len(denied_known)}.',
             )
-            self._show_process_report("Restart partial", QMessageBox.Icon.Warning, report_sections)
+            self._show_process_report(
+                'Restart partial',
+                QMessageBox.Icon.Warning,
+                report_sections,
+            )
             if denied_known:
                 self._offer_uac_elevation(
-                    reason="Windows denied permission while trying to restart AMD Adrenalin.",
+                    reason=(
+                        'Windows denied permission while trying'
+                        ' to restart AMD Adrenalin.'
+                    ),
                 )
             return
 
         self.status_label.setText(
-            f"Restarted AMD Adrenalin: closed {len(stopped_known)}, started {len(started_known)}.",
+            f'Restarted AMD Adrenalin:'
+            f' closed {len(stopped_known)},'
+            f' started {len(started_known)}.',
         )
-        self._show_process_report("Restart complete", QMessageBox.Icon.Information, report_sections)
+        self._show_process_report(
+            'Restart complete',
+            QMessageBox.Icon.Information,
+            report_sections,
+        )
 
     def start_only(self) -> None:
         """Launch Radeon Software without stopping any existing instance first."""
         if not self.process_path.exists():
-            self.status_label.setText("RadeonSoftware.exe path was not found.")
+            self.status_label.setText('RadeonSoftware.exe path was not found.')
             self._popup(
-                "Path not found",
-                f"Could not find executable at:\n{self.process_path}",
+                'Path not found',
+                f'Could not find executable at:\n{self.process_path}',
                 QMessageBox.Icon.Critical,
             )
             return
 
         existing_pid = get_pid_by_path(self.process_path)
         if existing_pid is not None:
-            existing_categories, existing_info = self._collect_managed_report_data(existing_pid)
+            existing_categories, existing_info = (
+                self._collect_managed_report_data(existing_pid)
+            )
 
-            self.status_label.setText("RadeonSoftware.exe is already running.")
+            self.status_label.setText('RadeonSoftware.exe is already running.')
             self._show_process_report(
-                "Already running",
+                'Already running',
                 QMessageBox.Icon.Information,
                 self._build_report_sections_from_pid_groups(
                     existing_info,
-                    [("Running", sorted(existing_categories))],
+                    [('Running', sorted(existing_categories))],
                 ),
             )
             return
 
         launch_detached(self.process_path)
         started_pid = self._wait_for_managed_process_start()
-        started_categories, started_info = self._collect_managed_report_data(started_pid)
+        started_categories, started_info = (
+            self._collect_managed_report_data(started_pid)
+        )
         started_known = sorted(started_categories)
         report_sections = self._build_report_sections_from_pid_groups(
             started_info,
-            [("Started", started_known)],
+            [('Started', started_known)],
         )
 
         if not started_known:
-            self.status_label.setText("Launch requested, but no AMD Adrenalin process was detected yet.")
-            self._show_process_report("Start status", QMessageBox.Icon.Warning, report_sections)
+            self.status_label.setText(
+                'Launch requested, but no AMD Adrenalin'
+                ' process was detected yet.',
+            )
+            self._show_process_report(
+                'Start status',
+                QMessageBox.Icon.Warning,
+                report_sections,
+            )
             return
 
-        self.status_label.setText(f"Started {len(started_known)} AMD Adrenalin process(es).")
-        self._show_process_report("Started", QMessageBox.Icon.Information, report_sections)
+        self.status_label.setText(
+            f'Started {len(started_known)}'
+            ' AMD Adrenalin process(es).',
+        )
+        self._show_process_report(
+            'Started',
+            QMessageBox.Icon.Information,
+            report_sections,
+        )
 
     def _set_monitor_badge(self, *, is_running: bool) -> None:
         """Update the monitor badge text and style based on running state."""
         if is_running:
-            self.status_badge.setText("● RUNNING")
-            self.status_badge.setObjectName("badge_running")
+            self.status_badge.setText('● RUNNING')
+            self.status_badge.setObjectName('badge_running')
         else:
-            self.status_badge.setText("● NOT RUNNING")
-            self.status_badge.setObjectName("badge_stopped")
+            self.status_badge.setText('● NOT RUNNING')
+            self.status_badge.setObjectName('badge_stopped')
         self.status_badge.setStyle(self.status_badge.style())
 
     def _schedule_refresh(self) -> None:
@@ -863,16 +1040,16 @@ class MainWindow(QMainWindow):
             target=self._run_refresh_worker,
             args=(str(self.process_path),),
             daemon=True,
-            name="proc-refresh",
+            name='proc-refresh',
         )
         worker.start()
 
     def _run_refresh_worker(self, process_path: str) -> None:
-        """Collect a refresh snapshot in a worker thread and emit it to the GUI thread."""
+        """Collect a refresh snapshot in a worker thread."""
         try:
             snapshot = collect_refresh_snapshot(process_path)
         except (RuntimeError, ValueError, TypeError, psutil.Error, OSError) as exc:
-            self._refresh_bridge.snapshot_ready.emit({"error": str(exc)})
+            self._refresh_bridge.snapshot_ready.emit({'error': str(exc)})
             return
 
         self._refresh_bridge.snapshot_ready.emit(snapshot)
@@ -881,16 +1058,28 @@ class MainWindow(QMainWindow):
         """Apply worker-produced refresh data on the GUI thread."""
         self._refresh_in_flight = False
 
-        if isinstance(snapshot, dict) and "error" not in snapshot:
-            is_running = bool(snapshot.get("is_running", False))
-            managed_rows = snapshot.get("managed_rows", [])
-            companion_rows = snapshot.get("companion_rows", [])
-            service_rows = snapshot.get("service_rows", [])
+        if isinstance(snapshot, dict) and 'error' not in snapshot:
+            is_running = bool(snapshot.get('is_running', False))
+            managed_rows = snapshot.get('managed_rows', [])
+            companion_rows = snapshot.get('companion_rows', [])
+            service_rows = snapshot.get('service_rows', [])
 
-            if isinstance(managed_rows, list) and isinstance(companion_rows, list) and isinstance(service_rows, list):
+            if (
+                isinstance(managed_rows, list)
+                and isinstance(companion_rows, list)
+                and isinstance(service_rows, list)
+            ):
                 self._set_monitor_badge(is_running=is_running)
-                self._update_process_section(self.managed_section, self.managed_table, managed_rows)
-                self._update_process_section(self.companion_section, self.companion_table, companion_rows)
+                self._update_process_section(
+                    self.managed_section,
+                    self.managed_table,
+                    managed_rows,
+                )
+                self._update_process_section(
+                    self.companion_section,
+                    self.companion_table,
+                    companion_rows,
+                )
                 self._update_process_section(
                     self.service_section,
                     self.service_table,
@@ -910,10 +1099,10 @@ class MainWindow(QMainWindow):
         """Terminate the running Radeon Software process tree."""
         pid = get_pid_by_path(self.process_path)
         if pid is None:
-            self.status_label.setText("RadeonSoftware.exe is not running.")
+            self.status_label.setText('RadeonSoftware.exe is not running.')
             self._popup(
-                "Not running",
-                "AMD Adrenalin is not currently running.",
+                'Not running',
+                'AMD Adrenalin is not currently running.',
                 QMessageBox.Icon.Warning,
             )
             return
@@ -922,44 +1111,65 @@ class MainWindow(QMainWindow):
 
         target_create_times = self._capture_target_create_times(set(target_categories))
         stopped_pids, denied_pids = terminate_process_tree(pid)
-        denied_pids = self._filter_denied_pids_still_running(denied_pids, target_create_times)
+        denied_pids = self._filter_denied_pids_still_running(
+            denied_pids, target_create_times,
+        )
 
         attempted_pids = sorted(target_categories)
-        stopped_known, denied_known, gone_known_unsorted = self._classify_attempted_pids(
-            attempted_pids,
-            stopped_pids,
-            denied_pids,
+        stopped_known, denied_known, gone_known_unsorted = (
+            self._classify_attempted_pids(
+                attempted_pids,
+                stopped_pids,
+                denied_pids,
+            )
         )
         gone_known = sorted(gone_known_unsorted)
 
         report_sections = self._build_report_sections_from_pid_groups(
             process_info,
             [
-                ("Closed", stopped_known),
-                ("Could not close (permissions)", denied_known),
-                ("Already gone / ended during action", gone_known),
+                ('Closed', stopped_known),
+                ('Could not close (permissions)', denied_known),
+                ('Already gone / ended during action', gone_known),
             ],
         )
 
         if denied_known:
             self.status_label.setText(
-                f"Stop partial: closed {len(stopped_known)}, denied {len(denied_known)}.",
+                f'Stop partial:'
+                f' closed {len(stopped_known)},'
+                f' denied {len(denied_known)}.',
             )
-            self._show_process_report("Stop partial", QMessageBox.Icon.Warning, report_sections)
+            self._show_process_report(
+                'Stop partial',
+                QMessageBox.Icon.Warning,
+                report_sections,
+            )
             self._offer_uac_elevation(
-                reason="Windows denied permission while trying to stop AMD Adrenalin.",
+                reason=(
+                    'Windows denied permission while'
+                    ' trying to stop AMD Adrenalin.'
+                ),
             )
             return
 
         if stopped_pids:
             self.status_label.setText(
-                f"Stopped {len(stopped_known)} AMD Adrenalin process(es).",
+                f'Stopped {len(stopped_known)} AMD Adrenalin process(es).',
             )
-            self._show_process_report("Stopped", QMessageBox.Icon.Information, report_sections)
+            self._show_process_report(
+                'Stopped',
+                QMessageBox.Icon.Information,
+                report_sections,
+            )
             return
 
-        self.status_label.setText("RadeonSoftware.exe is no longer running.")
-        self._show_process_report("Already stopped", QMessageBox.Icon.Information, report_sections)
+        self.status_label.setText('RadeonSoftware.exe is no longer running.')
+        self._show_process_report(
+            'Already stopped',
+            QMessageBox.Icon.Information,
+            report_sections,
+        )
 
     def _collect_managed_targets(
         self,
@@ -971,7 +1181,12 @@ class MainWindow(QMainWindow):
         if main_pid is None:
             return
 
-        self._collect_process_tree_targets_for_pid(main_pid, "Managed", target_categories, process_info)
+        self._collect_process_tree_targets_for_pid(
+            main_pid,
+            'Managed',
+            target_categories,
+            process_info,
+        )
 
     def _collect_companion_service_targets(
         self,
@@ -980,16 +1195,16 @@ class MainWindow(QMainWindow):
     ) -> None:
         """Collect companion/service processes and their child targets."""
         tracked_names = COMPANION_NAMES | SERVICE_NAMES
-        for proc in psutil.process_iter(["pid", "name"]):
+        for proc in psutil.process_iter(['pid', 'name']):
             try:
-                name = proc.info.get("name")
+                name = proc.info.get('name')
                 if not isinstance(name, str):
                     continue
                 name_lower = name.lower()
                 if name_lower not in tracked_names:
                     continue
 
-                category = "Companion" if name_lower in COMPANION_NAMES else "Service"
+                category = 'Companion' if name_lower in COMPANION_NAMES else 'Service'
                 target_categories[proc.pid] = category
                 capture_process_info(process_info, proc.pid, category)
                 try:
@@ -1002,8 +1217,11 @@ class MainWindow(QMainWindow):
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
 
-    def _stop_targets(self, target_categories: dict[int, str]) -> tuple[set[int], set[int]]:
-        """Stop each target process tree and return aggregate stopped/denied PID sets."""
+    def _stop_targets(
+        self,
+        target_categories: dict[int, str],
+    ) -> tuple[set[int], set[int]]:
+        """Stop each target process tree; return stopped/denied PIDs."""
         stopped_pids_total: set[int] = set()
         denied_pids_total: set[int] = set()
         for pid in sorted(target_categories):
@@ -1013,7 +1231,7 @@ class MainWindow(QMainWindow):
         return stopped_pids_total, denied_pids_total
 
     def stop_all(self) -> None:
-        """Terminate Radeon Software plus monitored AMD companion and service processes."""
+        """Terminate Radeon Software plus monitored AMD processes."""
         target_categories: dict[int, str] = {}
         process_info: dict[int, dict[str, str]] = {}
 
@@ -1021,20 +1239,22 @@ class MainWindow(QMainWindow):
         self._collect_companion_service_targets(target_categories, process_info)
 
         if not target_categories:
-            self.status_label.setText("No monitored AMD processes are running.")
+            self.status_label.setText('No monitored AMD processes are running.')
             self._popup(
-                "Nothing to stop",
-                "No monitored AMD processes were found.",
+                'Nothing to stop',
+                'No monitored AMD processes were found.',
                 QMessageBox.Icon.Information,
             )
             return
 
         target_create_times = self._capture_target_create_times(set(target_categories))
         stopped_pids_total, denied_pids_total = self._stop_targets(target_categories)
-        denied_pids_total = self._filter_denied_pids_still_running(denied_pids_total, target_create_times)
+        denied_pids_total = self._filter_denied_pids_still_running(
+            denied_pids_total, target_create_times,
+        )
 
         for pid in stopped_pids_total | denied_pids_total:
-            category = target_categories.get(pid, "Unknown")
+            category = target_categories.get(pid, 'Unknown')
             capture_process_info(process_info, pid, category)
 
         report_sections = build_stop_all_report_sections(
@@ -1047,13 +1267,25 @@ class MainWindow(QMainWindow):
         denied_count = len(denied_pids_total)
         if denied_count > 0:
             self.status_label.setText(
-                f"Stopped {stopped_count} AMD process(es), {denied_count} denied by permissions.",
+                f'Stopped {stopped_count} AMD process(es),'
+                f' {denied_count} denied by permissions.',
             )
-            self._show_process_report("Stop All partial", QMessageBox.Icon.Warning, report_sections)
+            self._show_process_report(
+                'Stop All partial',
+                QMessageBox.Icon.Warning,
+                report_sections,
+            )
             self._offer_uac_elevation(
-                reason="Windows denied permission while trying to stop one or more AMD processes.",
+                reason=(
+                    'Windows denied permission while trying'
+                    ' to stop one or more AMD processes.'
+                ),
             )
             return
 
-        self.status_label.setText(f"Stopped {stopped_count} monitored AMD process(es).")
-        self._show_process_report("Stop All complete", QMessageBox.Icon.Information, report_sections)
+        self.status_label.setText(f'Stopped {stopped_count} monitored AMD process(es).')
+        self._show_process_report(
+            'Stop All complete',
+            QMessageBox.Icon.Information,
+            report_sections,
+        )

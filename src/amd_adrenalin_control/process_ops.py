@@ -6,9 +6,9 @@ import psutil
 
 
 def get_pid_by_path(filepath: Path) -> int | None:
-    """Return the PID of the running process whose executable matches filepath, or None."""
-    for process in psutil.process_iter(["pid", "exe"]):
-        if process.info["exe"] == str(filepath.absolute()):
+    """Return the PID of the process matching filepath, or None."""
+    for process in psutil.process_iter(['pid', 'exe']):
+        if process.info['exe'] == str(filepath.absolute()):
             return process.pid
     return None
 
@@ -24,24 +24,35 @@ def _signal_process(
         getattr(proc, signal_name)()
         stopped_pids.add(proc.pid)
     except psutil.NoSuchProcess:
-        return "gone"
+        return 'gone'
     except psutil.AccessDenied:
         denied_pids.add(proc.pid)
-        return "denied"
-    return "ok"
+        return 'denied'
+    return 'ok'
 
 
-def _terminate_process(proc: psutil.Process, stopped_pids: set[int], denied_pids: set[int]) -> str:
-    """Terminate a process and track outcome as 'ok', 'gone', or 'denied'."""
-    return _signal_process(proc, "terminate", stopped_pids, denied_pids)
+def _terminate_process(
+    proc: psutil.Process,
+    stopped_pids: set[int],
+    denied_pids: set[int],
+) -> str:
+    """Terminate a process and track outcome."""
+    return _signal_process(proc, 'terminate', stopped_pids, denied_pids)
 
 
-def _kill_process(proc: psutil.Process, stopped_pids: set[int], denied_pids: set[int]) -> None:
+def _kill_process(
+    proc: psutil.Process,
+    stopped_pids: set[int],
+    denied_pids: set[int],
+) -> None:
     """Force-kill a process and track stopped/denied results."""
-    _signal_process(proc, "kill", stopped_pids, denied_pids)
+    _signal_process(proc, 'kill', stopped_pids, denied_pids)
 
 
-def _collect_alive_after_wait(children: list[psutil.Process], denied_pids: set[int]) -> list[psutil.Process]:
+def _collect_alive_after_wait(
+    children: list[psutil.Process],
+    denied_pids: set[int],
+) -> list[psutil.Process]:
     """Wait briefly for children to exit and return those still alive."""
     alive_children: list[psutil.Process] = []
     for child in children:
@@ -67,7 +78,10 @@ def _get_process_or_none(pid: int, denied_pids: set[int]) -> psutil.Process | No
         return None
 
 
-def _get_children_or_empty(parent: psutil.Process, denied_pids: set[int]) -> list[psutil.Process]:
+def _get_children_or_empty(
+    parent: psutil.Process,
+    denied_pids: set[int],
+) -> list[psutil.Process]:
     """Return recursive children or an empty list if inaccessible."""
     try:
         return parent.children(recursive=True)
@@ -78,7 +92,11 @@ def _get_children_or_empty(parent: psutil.Process, denied_pids: set[int]) -> lis
         return []
 
 
-def _wait_or_kill_parent(parent: psutil.Process, stopped_pids: set[int], denied_pids: set[int]) -> None:
+def _wait_or_kill_parent(
+    parent: psutil.Process,
+    stopped_pids: set[int],
+    denied_pids: set[int],
+) -> None:
     """Wait for parent to exit, then force-kill if timeout is reached."""
     try:
         parent.wait(3)
@@ -109,7 +127,7 @@ def terminate_process_tree(pid: int) -> tuple[set[int], set[int]]:
         _kill_process(child, stopped_pids, denied_pids)
 
     parent_state = _terminate_process(parent, stopped_pids, denied_pids)
-    if parent_state in {"gone", "denied"}:
+    if parent_state in {'gone', 'denied'}:
         return stopped_pids, denied_pids
 
     _wait_or_kill_parent(parent, stopped_pids, denied_pids)
@@ -120,14 +138,14 @@ def terminate_process_tree(pid: int) -> tuple[set[int], set[int]]:
 def launch_detached(filepath: Path) -> None:
     """Launch the target executable detached from this Python process on Windows."""
     executable = filepath.resolve(strict=True)
-    if executable.suffix.lower() != ".exe":
-        msg = f"Expected an .exe path, got: {executable}"
+    if executable.suffix.lower() != '.exe':
+        msg = f'Expected an .exe path, got: {executable}'
         raise ValueError(msg)
 
     creation_flags = 0
-    creation_flags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    creation_flags |= getattr(subprocess, "DETACHED_PROCESS", 0)
-    creation_flags |= getattr(subprocess, "CREATE_BREAKAWAY_FROM_JOB", 0)
+    creation_flags |= getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0)
+    creation_flags |= getattr(subprocess, 'DETACHED_PROCESS', 0)
+    creation_flags |= getattr(subprocess, 'CREATE_BREAKAWAY_FROM_JOB', 0)
 
     subprocess.Popen(  # noqa: S603
         [str(executable)],

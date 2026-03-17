@@ -8,7 +8,7 @@ from src.amd_adrenalin_control.main_window import MainWindow
 def main() -> None:
     """Application entrypoint used by direct execution and project scripts."""
     app = QApplication([])
-    app.setStyle("Fusion")
+    app.setStyle('Fusion')
 
     window = MainWindow()
     window.show()
@@ -16,5 +16,5 @@ def main() -> None:
     app.exec()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

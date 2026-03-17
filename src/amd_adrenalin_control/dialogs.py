@@ -20,7 +20,13 @@ from .ui_helpers import require_qheader_view
 class NotificationDialog(QDialog):
     """Styled in-app dialog used instead of native message boxes."""
 
-    def __init__(self, parent: QWidget, title: str, text: str, icon: QMessageBox.Icon) -> None:
+    def __init__(
+        self,
+        parent: QWidget,
+        title: str,
+        text: str,
+        icon: QMessageBox.Icon,
+    ) -> None:
         """Initialize a styled modal notification dialog."""
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -34,18 +40,26 @@ class NotificationDialog(QDialog):
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
 
-        heading = QLabel(f"{heading_text}  {title}", self)
-        heading.setObjectName("dialog_heading")
+        heading = QLabel(f'{heading_text}  {title}', self)
+        heading.setObjectName('dialog_heading')
 
-        body = QLabel("Details", self)
-        body.setObjectName("dialog_subheading")
+        body = QLabel('Details', self)
+        body.setObjectName('dialog_subheading')
 
         content = QTableWidget(0, 1, self)
-        content.setObjectName("dialog_text")
+        content.setObjectName('dialog_text')
         content.setRowCount(1)
         content.setColumnCount(1)
-        require_qheader_view(content.horizontalHeader(), "dialog horizontal header").setVisible(False)
-        require_qheader_view(content.verticalHeader(), "dialog vertical header").setVisible(False)
+        h_header = require_qheader_view(
+            content.horizontalHeader(),
+            'dialog horizontal header',
+        )
+        h_header.setVisible(False)
+        v_header = require_qheader_view(
+            content.verticalHeader(),
+            'dialog vertical header',
+        )
+        v_header.setVisible(False)
         content.setShowGrid(False)
         content.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         content.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
@@ -56,13 +70,20 @@ class NotificationDialog(QDialog):
         content.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         text_item = QTableWidgetItem(text)
-        text_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        text_item.setTextAlignment(
+            Qt.AlignmentFlag.AlignLeft
+            | Qt.AlignmentFlag.AlignTop,
+        )
         content.setItem(0, 0, text_item)
         content.setColumnWidth(0, 680)
         content.resizeRowsToContents()
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok, self)
-        buttons.accepted.connect(self.accept)  # pyright: ignore[reportUnknownMemberType]
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok, self,
+        )
+        buttons.accepted.connect(  # pyright: ignore[reportUnknownMemberType]
+            self.accept,
+        )
 
         layout.addWidget(heading)
         layout.addWidget(body)
@@ -119,12 +140,12 @@ class NotificationDialog(QDialog):
     def icon_theme(icon: QMessageBox.Icon) -> tuple[str, str]:
         """Return heading label and accent color for the provided icon type."""
         if icon == QMessageBox.Icon.Warning:
-            return "WARNING", "#f59e0b"
+            return 'WARNING', '#f59e0b'
         if icon == QMessageBox.Icon.Critical:
-            return "ERROR", "#ef4444"
+            return 'ERROR', '#ef4444'
         if icon == QMessageBox.Icon.Information:
-            return "INFO", "#22c55e"
-        return "NOTICE", "#60a5fa"
+            return 'INFO', '#22c55e'
+        return 'NOTICE', '#60a5fa'
 
 
 class ProcessReportDialog(QDialog):
@@ -156,71 +177,73 @@ class ProcessReportDialog(QDialog):
         root.setContentsMargins(16, 14, 16, 14)
         root.setSpacing(10)
 
-        heading = QLabel(f"{heading_text}  {title}", self)
-        heading.setObjectName("report_heading")
+        heading = QLabel(f'{heading_text}  {title}', self)
+        heading.setObjectName('report_heading')
 
-        subtitle = QLabel("Action Report", self)
-        subtitle.setObjectName("report_subheading")
+        subtitle = QLabel('Action Report', self)
+        subtitle.setObjectName('report_subheading')
 
         scroll = QScrollArea(self)
-        scroll.setObjectName("report_scroll")
+        scroll.setObjectName('report_scroll')
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         if viewport := scroll.viewport():
-            viewport.setObjectName("report_viewport")
+            viewport.setObjectName('report_viewport')
 
         body = QWidget(scroll)
-        body.setObjectName("report_body")
+        body.setObjectName('report_body')
         body_layout = QVBoxLayout(body)
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(12)
 
         if not populated_sections:
-            empty = QLabel("No processes to report.", body)
-            empty.setObjectName("report_empty")
+            empty = QLabel('No processes to report.', body)
+            empty.setObjectName('report_empty')
             body_layout.addWidget(empty)
         else:
             for section_title, entries in populated_sections:
                 section = QFrame(body)
-                section.setObjectName("report_section")
+                section.setObjectName('report_section')
                 section_layout = QVBoxLayout(section)
                 section_layout.setContentsMargins(12, 12, 12, 12)
                 section_layout.setSpacing(8)
 
-                section_header = QLabel(f"{section_title} ({len(entries)})", section)
-                section_header.setObjectName("report_section_title")
+                section_header = QLabel(f'{section_title} ({len(entries)})', section)
+                section_header.setObjectName('report_section_title')
                 section_layout.addWidget(section_header)
 
                 for entry in entries:
                     card = QFrame(section)
-                    card.setObjectName("report_card")
+                    card.setObjectName('report_card')
                     card_layout = QVBoxLayout(card)
                     card_layout.setContentsMargins(10, 10, 10, 10)
                     card_layout.setSpacing(4)
 
-                    name = entry.get("name", "<unknown>")
-                    pid = entry.get("pid", "?")
-                    category = entry.get("category", "Unknown")
-                    parent_text = entry.get("parent", "<unknown>")
-                    path_text = entry.get("path", "<unavailable>")
+                    name = entry.get('name', '<unknown>')
+                    pid = entry.get('pid', '?')
+                    category = entry.get('category', 'Unknown')
+                    parent_text = entry.get('parent', '<unknown>')
+                    path_text = entry.get('path', '<unavailable>')
 
-                    title_label = QLabel(f"{name} (PID {pid})", card)
-                    title_label.setObjectName("report_card_title")
+                    title_label = QLabel(f'{name} (PID {pid})', card)
+                    title_label.setObjectName('report_card_title')
 
                     meta_label = QLabel(
-                        f"Category: {category}\n"
-                        f"Parent: {parent_text}",
+                        f'Category: {category}\n'
+                        f'Parent: {parent_text}',
                         card,
                     )
-                    meta_label.setObjectName("report_card_meta")
+                    meta_label.setObjectName('report_card_meta')
 
-                    path_label = QLabel("Path:", card)
-                    path_label.setObjectName("report_card_path_label")
+                    path_label = QLabel('Path:', card)
+                    path_label.setObjectName('report_card_path_label')
 
                     path_value = QLabel(path_text, card)
-                    path_value.setObjectName("report_card_path")
+                    path_value.setObjectName('report_card_path')
                     path_value.setWordWrap(True)
-                    path_value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                    path_value.setTextInteractionFlags(
+                        Qt.TextInteractionFlag.TextSelectableByMouse,
+                    )
 
                     card_layout.addWidget(title_label)
                     card_layout.addWidget(meta_label)
@@ -233,8 +256,12 @@ class ProcessReportDialog(QDialog):
         body_layout.addStretch()
         scroll.setWidget(body)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok, self)
-        buttons.accepted.connect(self.accept)  # pyright: ignore[reportUnknownMemberType]
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok, self,
+        )
+        buttons.accepted.connect(  # pyright: ignore[reportUnknownMemberType]
+            self.accept,
+        )
 
         root.addWidget(heading)
         root.addWidget(subtitle)
