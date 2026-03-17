@@ -15,6 +15,19 @@ class RefreshBridge(QObject):
     snapshot_ready = pyqtSignal(object)
 
 
+def _safe_process_name_lower(proc: psutil.Process) -> str | None:
+    """Return a process name in lowercase when available, otherwise None."""
+    info_name = proc.info.get("name")
+    if isinstance(info_name, str):
+        return info_name.lower()
+
+    try:
+        with proc.oneshot():
+            return proc.name().lower()
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return None
+
+
 def build_row_snapshot(proc: psutil.Process, indent: int) -> dict[str, object]:
     """Build a plain-data row snapshot for a process."""
     try:
@@ -34,6 +47,16 @@ def build_row_snapshot(proc: psutil.Process, indent: int) -> dict[str, object]:
     except psutil.NoSuchProcess:
         name, path_text, pid_text, cpu_text, mem_text, status = "<ended>", "<unavailable>", "-", "-", "-", "gone"
         pid_value = None
+    except psutil.AccessDenied:
+        name, path_text, pid_text, cpu_text, mem_text, status = (
+            "<restricted>",
+            "Executable path unavailable",
+            str(proc.pid),
+            "-",
+            "-",
+            "restricted",
+        )
+        pid_value = proc.pid
 
     return {
         "name": name,
@@ -86,17 +109,18 @@ def split_companion_and_service_rows(
     for proc in all_procs.values():
         if proc.pid in managed_pids:
             continue
-        try:
-            name_lower = proc.name().lower()
-            if name_lower in COMPANION_NAMES:
-                companion_rows.append(proc)
-            elif name_lower in SERVICE_NAMES:
-                service_rows.append(proc)
-        except psutil.NoSuchProcess:
-            pass
 
-    companion_rows.sort(key=lambda proc: proc.name().lower())
-    service_rows.sort(key=lambda proc: proc.name().lower())
+        name_lower = _safe_process_name_lower(proc)
+        if name_lower is None:
+            continue
+
+        if name_lower in COMPANION_NAMES:
+            companion_rows.append(proc)
+        elif name_lower in SERVICE_NAMES:
+            service_rows.append(proc)
+
+    companion_rows.sort(key=lambda proc: _safe_process_name_lower(proc) or "")
+    service_rows.sort(key=lambda proc: _safe_process_name_lower(proc) or "")
     return companion_rows, service_rows
 
 

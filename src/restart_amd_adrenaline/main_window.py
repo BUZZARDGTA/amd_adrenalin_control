@@ -49,10 +49,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.process_path = RADEON_SOFTWARE_PATH
         self.setWindowTitle("AMD Adrenalin Control")
-        self.setMinimumSize(973, 733)
-        self.resize(1113, 853)
+        self.setMinimumSize(990, 765)
+        self.resize(1130, 885)
 
-        # Define UI attributes in __init__ to satisfy pylint W0201.
         self.status_label = QLabel("Monitoring Radeon Software and related AMD processes.", self)
         self.path_label = QLabel(f"Path: {self.process_path}", self)
         self.status_badge = QLabel("● NOT RUNNING", self)
