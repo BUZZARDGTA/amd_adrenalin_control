@@ -1,6 +1,9 @@
 """UI-specific runtime type validation helpers."""
 
-from PyQt6.QtWidgets import QApplication, QHeaderView, QTableWidget
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QApplication, QHeaderView, QTableWidget, QTableWidgetItem
+
+COPY_TEXT_ROLE = Qt.ItemDataRole.UserRole + 1
 
 
 class InvalidTypeError(TypeError):
@@ -26,6 +29,17 @@ def require_qheader_view(value: object, field_name: str) -> QHeaderView:
     return value
 
 
+def _clipboard_text_for_item(item: QTableWidgetItem | None) -> str:
+    """Return clipboard text override for an item when one exists."""
+    if item is None:
+        return ""
+
+    clipboard_text = item.data(COPY_TEXT_ROLE)
+    if isinstance(clipboard_text, str):
+        return clipboard_text
+    return item.text()
+
+
 def copy_selected_rows(table: QTableWidget) -> None:
     """Copy selected table rows to the clipboard as tab-separated text."""
     selection_model = table.selectionModel()
@@ -42,7 +56,7 @@ def copy_selected_rows(table: QTableWidget) -> None:
         row_values: list[str] = []
         for col_idx in range(table.columnCount()):
             item = table.item(row_idx, col_idx)
-            row_values.append(item.text() if item is not None else "")
+            row_values.append(_clipboard_text_for_item(item))
         copied_rows.append("\t".join(row_values))
 
     clipboard = QApplication.clipboard()
@@ -77,7 +91,7 @@ def copy_selected_cells(table: QTableWidget) -> None:
                 continue
 
             item = table.item(row_idx, col_idx)
-            row_values.append(item.text() if item is not None else "")
+            row_values.append(_clipboard_text_for_item(item))
         copied_rows.append("\t".join(row_values))
 
     clipboard = QApplication.clipboard()

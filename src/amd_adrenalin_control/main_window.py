@@ -1,6 +1,7 @@
 """Main application window and UI behavior."""
 
 import contextlib
+import subprocess
 import threading
 import time
 
@@ -26,12 +27,12 @@ from PyQt6.QtWidgets import (
 
 from ._report_helpers import build_stop_all_report_sections, capture_process_info, to_report_entry
 from ._stylesheet import MAIN_STYLESHEET
-from .constants import COMPANION_NAMES, RADEON_SOFTWARE_PATH, SERVICE_NAMES, STATUS_COLORS
+from .constants import COMPANION_NAMES, PROCESS_TOOLTIPS, RADEON_SOFTWARE_PATH, SERVICE_NAMES, STATUS_COLORS
 from .dialogs import NotificationDialog, ProcessReportDialog
 from .process_ops import get_pid_by_path, launch_detached, terminate_process_tree
 from .refresh_snapshot import RefreshBridge, collect_refresh_snapshot
 from .uac import is_debug_session, is_running_as_admin, request_self_elevation
-from .ui_helpers import copy_selected_cells, copy_selected_rows, require_qheader_view
+from .ui_helpers import COPY_TEXT_ROLE, copy_selected_cells, copy_selected_rows, require_qheader_view
 
 PATH_COLUMN_INDEX = 1
 PID_COLUMN_INDEX = 2
@@ -312,6 +313,7 @@ class MainWindow(QMainWindow):
 
         for row_idx, row in enumerate(rows):
             name = str(row["name"])
+            raw_name = str(row.get("raw_name", name))
             path_text = str(row["path"])
             pid_text = str(row["pid_text"])
             cpu_text = str(row["cpu_text"])
@@ -330,6 +332,10 @@ class MainWindow(QMainWindow):
                 item.setBackground(row_bg)
                 if col == PATH_COLUMN_INDEX:
                     item.setToolTip(path_text)
+                if col == NAME_COLUMN_INDEX:
+                    item.setData(COPY_TEXT_ROLE, raw_name)
+                if col == NAME_COLUMN_INDEX and (tooltip := PROCESS_TOOLTIPS.get(raw_name.lower())):
+                    item.setToolTip(tooltip)
                 if col == NAME_COLUMN_INDEX and isinstance(pid_value, int):
                     item.setData(Qt.ItemDataRole.UserRole, pid_value)
                 if col == STATUS_COLUMN_INDEX:
@@ -527,10 +533,12 @@ class MainWindow(QMainWindow):
         actions: dict[str, QAction | None],
         table: QTableWidget,
         pid: int | None,
+        row_path: str | None = None,
     ) -> None:
         """Execute the selected process-row context menu action."""
         copy_cells_action = actions["copy_cells"]
         copy_rows_action = actions["copy_rows"]
+        open_location_action = actions.get("open_location")
         terminate_process_action = actions["terminate_process"]
         terminate_tree_action = actions["terminate_tree"]
 
@@ -543,6 +551,10 @@ class MainWindow(QMainWindow):
 
         if copy_rows_action is not None and chosen_action == copy_rows_action:
             copy_selected_rows(table)
+            return
+
+        if open_location_action is not None and chosen_action == open_location_action and row_path is not None:
+            subprocess.run(["explorer", "/select,", row_path], check=False)  # noqa: S603 S607
             return
 
         if (
@@ -575,12 +587,18 @@ class MainWindow(QMainWindow):
             table.setCurrentCell(row_idx, col_idx)
 
         pid = self._process_pid_from_row(table, row_idx)
+        path_item = table.item(row_idx, PATH_COLUMN_INDEX)
+        row_path = path_item.text() if path_item is not None and path_item.text() not in ("-", "") else None
 
         menu = QMenu(table)
         copy_cells_action = menu.addAction("Copy selected cells")
         copy_rows_action = menu.addAction("Copy selected rows")
+        open_location_action = None
         terminate_process_action = None
         terminate_tree_action = None
+        if row_path is not None:
+            menu.addSeparator()
+            open_location_action = menu.addAction("Open file location")
         if pid is not None:
             menu.addSeparator()
             terminate_process_action = menu.addAction("Terminate process")
@@ -594,6 +612,7 @@ class MainWindow(QMainWindow):
         actions: dict[str, QAction | None] = {
             "copy_cells": copy_cells_action,
             "copy_rows": copy_rows_action,
+            "open_location": open_location_action,
             "terminate_process": terminate_process_action,
             "terminate_tree": terminate_tree_action,
         }
@@ -602,7 +621,9 @@ class MainWindow(QMainWindow):
             actions=actions,
             table=table,
             pid=pid,
+            row_path=row_path,
         )
+        return
 
     def _popup(self, title: str, text: str, icon: QMessageBox.Icon) -> None:
         """Show a styled in-app modal dialog for status and report messages."""

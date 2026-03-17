@@ -32,7 +32,8 @@ def build_row_snapshot(proc: psutil.Process, indent: int) -> dict[str, object]:
     """Build a plain-data row snapshot for a process."""
     try:
         prefix = "  └  " if indent > 0 else ""
-        name = prefix + proc.name()
+        raw_name = proc.name()
+        name = prefix + raw_name
         pid_text = str(proc.pid)
         cpu_text = f"{proc.cpu_percent(interval=None):.1f} %"
         mem_mb = proc.memory_info().rss / (1024 * 1024)
@@ -45,11 +46,13 @@ def build_row_snapshot(proc: psutil.Process, indent: int) -> dict[str, object]:
             path_text = "Executable path unavailable"
         pid_value: int | None = proc.pid
     except psutil.NoSuchProcess:
-        name, path_text, pid_text, cpu_text, mem_text, status = "<ended>", "<unavailable>", "-", "-", "-", "gone"
+        raw_name = "<ended>"
+        name, path_text, pid_text, cpu_text, mem_text, status = raw_name, "<unavailable>", "-", "-", "-", "gone"
         pid_value = None
     except psutil.AccessDenied:
+        raw_name = "<restricted>"
         name, path_text, pid_text, cpu_text, mem_text, status = (
-            "<restricted>",
+            raw_name,
             "Executable path unavailable",
             str(proc.pid),
             "-",
@@ -60,6 +63,7 @@ def build_row_snapshot(proc: psutil.Process, indent: int) -> dict[str, object]:
 
     return {
         "name": name,
+        "raw_name": raw_name,
         "path": path_text,
         "pid_text": pid_text,
         "cpu_text": cpu_text,
