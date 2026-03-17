@@ -2,7 +2,7 @@
 
 from PyQt6.QtWidgets import QApplication
 
-from src.restart_amd_adrenaline.main_window import MainWindow
+from src.amd_adrenalin_control.main_window import MainWindow
 
 
 def main() -> None:

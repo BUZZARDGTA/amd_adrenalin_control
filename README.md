@@ -48,11 +48,11 @@ amd-adrenalin-control
 ## Project layout
 
 - `main.py`: Thin application entrypoint
-- `src/restart_amd_adrenaline/main_window.py`: Main PyQt window and app interactions
-- `src/restart_amd_adrenaline/dialogs.py`: Custom notification and report dialogs
-- `src/restart_amd_adrenaline/process_ops.py`: Process start/stop/terminate operations
-- `src/restart_amd_adrenaline/constants.py`: App constants and process name sets
-- `src/restart_amd_adrenaline/ui_helpers.py`: UI runtime type helpers
+- `src/amd_adrenalin_control/main_window.py`: Main PyQt window and app interactions
+- `src/amd_adrenalin_control/dialogs.py`: Custom notification and report dialogs
+- `src/amd_adrenalin_control/process_ops.py`: Process start/stop/terminate operations
+- `src/amd_adrenalin_control/constants.py`: App constants and process name sets
+- `src/amd_adrenalin_control/ui_helpers.py`: UI runtime type helpers
 - `requirements.txt`: Runtime dependencies
 - `pyproject.toml`: Project metadata and tooling config
 
