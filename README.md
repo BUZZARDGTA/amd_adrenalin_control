@@ -2,6 +2,10 @@
 
 PyQt6 desktop utility for Windows to control AMD Adrenalin and monitor related AMD processes.
 
+## Preview
+
+<img width="1132" height="917" alt="python_2026-03-17_07-17" src="https://github.com/user-attachments/assets/d59c280f-274f-41cb-a6e5-176f09249af8" />
+
 ## Features
 
 - Start AMD Adrenalin
