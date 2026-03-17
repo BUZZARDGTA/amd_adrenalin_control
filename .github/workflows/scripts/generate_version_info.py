@@ -32,6 +32,7 @@ VSVersionInfo(
           StringStruct('FileVersion', '{version}'),
           StringStruct('InternalName', 'amd-adrenalin-control'),
           StringStruct('OriginalFilename', 'amd-adrenalin-control.exe'),
+          StringStruct('LegalCopyright', 'Copyright (C) 2026 IB_U_Z_Z_A_R_Dl'),
           StringStruct('ProductName', 'AMD Adrenalin Control'),
           StringStruct('ProductVersion', '{version}')
         ]
