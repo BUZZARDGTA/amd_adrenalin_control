@@ -21,6 +21,7 @@ PROCESS_TOOLTIPS: dict[str, str] = {
     # pylint: disable=line-too-long
     'radeonsoftware.exe': 'AMD application - GPU control, overlay, tuning, and features (Adrenalin).',  # noqa: E501
     'cncmd.exe': 'AMD utility - command-line control for Radeon settings and features (CNext).',  # noqa: E501
+    'splashwindow.exe': 'AMD helper - Adrenalin splash screen shown during startup.',
     'amdadlxserv.exe': 'AMD service - GPU monitoring and feature access (ADLX).',
     'amd3dvcacheuser.exe': 'AMD helper - 3D V-Cache thread scheduling for games (Ryzen X3D).',  # noqa: E501
     'cpumetricsserver.exe': 'AMD service - CPU metrics collection for performance monitoring (CNext).',  # noqa: E501
