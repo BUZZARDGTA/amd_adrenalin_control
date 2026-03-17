@@ -58,8 +58,7 @@ amd-adrenalin-control
 
 ## Notes
 
-- Some system/service processes may require elevated permissions to terminate.
-- In those cases, the app reports permission-denied processes in the stop report.
+- Some AMD processes require administrative privileges and may trigger a UAC prompt.
 
 ## License
 
