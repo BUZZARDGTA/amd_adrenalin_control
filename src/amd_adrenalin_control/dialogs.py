@@ -78,9 +78,7 @@ class NotificationDialog(QDialog):
         content.setColumnWidth(0, 680)
         content.resizeRowsToContents()
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok, self,
-        )
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok, self)
         buttons.accepted.connect(  # pyright: ignore[reportUnknownMemberType]
             self.accept,
         )
@@ -256,9 +254,7 @@ class ProcessReportDialog(QDialog):
         body_layout.addStretch()
         scroll.setWidget(body)
 
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok, self,
-        )
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok, self)
         buttons.accepted.connect(  # pyright: ignore[reportUnknownMemberType]
             self.accept,
         )

@@ -625,8 +625,7 @@ class MainWindow(QMainWindow):
             else 'terminate this process'
         )
         detail = (
-            'This will stop the selected process'
-            ' and all child processes.'
+            'This will stop the selected process and all child processes.'
             if tree
             else 'This will stop only the selected process.'
         )
@@ -773,10 +772,7 @@ class MainWindow(QMainWindow):
         answer = QMessageBox.question(
             self,
             'Administrator privileges required',
-            (
-                f'{reason}\n\n'
-                'Would you like to relaunch this app as administrator now?'
-            ),
+            f'{reason}\n\nWould you like to relaunch this app as administrator now?',
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes,
         )
@@ -786,8 +782,7 @@ class MainWindow(QMainWindow):
         if request_self_elevation():
             if is_debug_session():
                 self.status_label.setText(
-                    'Elevation requested in debug mode.'
-                    ' Keep this window open; close it'
+                    'Elevation requested in debug mode. Keep this window open; close it'
                     ' manually after elevated app is stable.',
                 )
                 return
@@ -999,8 +994,7 @@ class MainWindow(QMainWindow):
 
         if not started_known:
             self.status_label.setText(
-                'Launch requested, but no AMD Adrenalin'
-                ' process was detected yet.',
+                'Launch requested, but no AMD Adrenalin process was detected yet.',
             )
             self._show_process_report(
                 'Start status',
@@ -1010,8 +1004,7 @@ class MainWindow(QMainWindow):
             return
 
         self.status_label.setText(
-            f'Started {len(started_known)}'
-            ' AMD Adrenalin process(es).',
+            f'Started {len(started_known)} AMD Adrenalin process(es).',
         )
         self._show_process_report(
             'Started',
@@ -1146,10 +1139,7 @@ class MainWindow(QMainWindow):
                 report_sections,
             )
             self._offer_uac_elevation(
-                reason=(
-                    'Windows denied permission while'
-                    ' trying to stop AMD Adrenalin.'
-                ),
+                reason='Windows denied permission while trying to stop AMD Adrenalin.',
             )
             return
 
