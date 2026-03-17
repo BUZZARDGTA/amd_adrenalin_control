@@ -51,6 +51,10 @@ amd-adrenalin-control
 - `src/amd_adrenalin_control/main_window.py`: Main PyQt window and app interactions
 - `src/amd_adrenalin_control/dialogs.py`: Custom notification and report dialogs
 - `src/amd_adrenalin_control/process_ops.py`: Process start/stop/terminate operations
+- `src/amd_adrenalin_control/refresh_snapshot.py`: Background snapshot helpers for live process monitor refreshes
+- `src/amd_adrenalin_control/uac.py`: Windows UAC helpers for on-demand elevation
+- `src/amd_adrenalin_control/_report_helpers.py`: Process reporting helpers for stop operations
+- `src/amd_adrenalin_control/_stylesheet.py`: Application stylesheet
 - `src/amd_adrenalin_control/constants.py`: App constants and process name sets
 - `src/amd_adrenalin_control/ui_helpers.py`: UI runtime type helpers
 - `requirements.txt`: Runtime dependencies
