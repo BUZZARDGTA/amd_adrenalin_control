@@ -1,9 +1,16 @@
 """UI-specific runtime type validation helpers."""
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QApplication, QHeaderView, QTableWidget, QTableWidgetItem
+from PyQt6.QtCore import QItemSelectionModel, QModelIndex, Qt
+from PyQt6.QtWidgets import (
+    QApplication,
+    QHeaderView,
+    QTableWidget,
+    QTreeWidget,
+)
 
 COPY_TEXT_ROLE = Qt.ItemDataRole.UserRole + 1
+
+_CopyView = QTableWidget | QTreeWidget
 
 
 class InvalidTypeError(TypeError):
@@ -29,73 +36,141 @@ def require_qheader_view(value: object, field_name: str) -> QHeaderView:
     return value
 
 
-def _clipboard_text_for_item(item: QTableWidgetItem | None) -> str:
-    """Return clipboard text override for an item when one exists."""
-    if item is None:
+def _cell_text(view: _CopyView, index: QModelIndex) -> str:
+    """Return clipboard text for a model index, preferring COPY_TEXT_ROLE."""
+    model = view.model()
+    if model is None:
         return ''
-
-    clipboard_text = item.data(COPY_TEXT_ROLE)
+    clipboard_text = model.data(index, COPY_TEXT_ROLE)
     if isinstance(clipboard_text, str):
         return clipboard_text
-    return item.text()
+    display = model.data(index, Qt.ItemDataRole.DisplayRole)
+    return str(display) if display is not None else ''
 
 
-def copy_selected_rows(table: QTableWidget) -> None:
-    """Copy selected table rows to the clipboard as tab-separated text."""
-    selection_model = table.selectionModel()
-    if selection_model is None:
+def copy_selected_rows(view: _CopyView) -> None:
+    """Copy selected rows to the clipboard as tab-separated text."""
+    sel_model = view.selectionModel()
+    if sel_model is None:
         return
 
-    selected_indexes = selection_model.selectedIndexes()
-    if not selected_indexes:
+    indexes = sel_model.selectedIndexes()
+    if not indexes:
         return
 
-    row_numbers = sorted({index.row() for index in selected_indexes})
+    model = view.model()
+    if model is None:
+        return
+
+    col_count = model.columnCount()
+    rows_by_y: dict[int, QModelIndex] = {}
+    for idx in indexes:
+        y = view.visualRect(idx).y()
+        if y not in rows_by_y:
+            rows_by_y[y] = idx
+
     copied_rows: list[str] = []
-    for row_idx in row_numbers:
-        row_values: list[str] = []
-        for col_idx in range(table.columnCount()):
-            item = table.item(row_idx, col_idx)
-            row_values.append(_clipboard_text_for_item(item))
+    for y in sorted(rows_by_y):
+        ref = rows_by_y[y]
+        row_values = [
+            _cell_text(view, model.index(ref.row(), col, ref.parent()))
+            for col in range(col_count)
+        ]
         copied_rows.append('\t'.join(row_values))
 
     clipboard = QApplication.clipboard()
-    if clipboard is None:
-        return
-
-    clipboard.setText('\n'.join(copied_rows))
+    if clipboard is not None:
+        clipboard.setText('\n'.join(copied_rows))
 
 
-def copy_selected_cells(table: QTableWidget) -> None:
+def copy_selected_cells(view: _CopyView) -> None:
     """Copy selected cells to the clipboard preserving row/column layout."""
-    selection_model = table.selectionModel()
-    if selection_model is None:
+    sel_model = view.selectionModel()
+    if sel_model is None:
         return
 
-    selected_indexes = selection_model.selectedIndexes()
-    if not selected_indexes:
+    indexes = sel_model.selectedIndexes()
+    if not indexes:
         return
 
-    min_row = min(index.row() for index in selected_indexes)
-    max_row = max(index.row() for index in selected_indexes)
-    min_col = min(index.column() for index in selected_indexes)
-    max_col = max(index.column() for index in selected_indexes)
-    selected_positions = {(index.row(), index.column()) for index in selected_indexes}
+    min_col = min(idx.column() for idx in indexes)
+    max_col = max(idx.column() for idx in indexes)
+
+    rows_by_y: dict[int, dict[int, QModelIndex]] = {}
+    for idx in indexes:
+        y = view.visualRect(idx).y()
+        rows_by_y.setdefault(y, {})[idx.column()] = idx
 
     copied_rows: list[str] = []
-    for row_idx in range(min_row, max_row + 1):
+    for y in sorted(rows_by_y):
+        col_map = rows_by_y[y]
         row_values: list[str] = []
-        for col_idx in range(min_col, max_col + 1):
-            if (row_idx, col_idx) not in selected_positions:
-                row_values.append('')
-                continue
-
-            item = table.item(row_idx, col_idx)
-            row_values.append(_clipboard_text_for_item(item))
+        for col in range(min_col, max_col + 1):
+            cell_idx = col_map.get(col)
+            row_values.append(
+                _cell_text(view, cell_idx) if cell_idx is not None else '',
+            )
         copied_rows.append('\t'.join(row_values))
 
     clipboard = QApplication.clipboard()
-    if clipboard is None:
-        return
+    if clipboard is not None:
+        clipboard.setText('\n'.join(copied_rows))
 
-    clipboard.setText('\n'.join(copied_rows))
+
+def select_row(view: _CopyView, index: QModelIndex) -> None:
+    """Select all cells in the row containing *index*."""
+    sel_model = view.selectionModel()
+    model = view.model()
+    if sel_model is None or model is None:
+        return
+    sel_model.clearSelection()
+    parent = index.parent()
+    for col in range(model.columnCount(parent)):
+        sel_model.select(
+            model.index(index.row(), col, parent),
+            QItemSelectionModel.SelectionFlag.Select,
+        )
+
+
+def select_column(view: _CopyView, col: int) -> None:
+    """Select all visible cells in column *col*."""
+    sel_model = view.selectionModel()
+    model = view.model()
+    if sel_model is None or model is None:
+        return
+    sel_model.clearSelection()
+
+    def _select_children(parent: QModelIndex) -> None:
+        for row in range(model.rowCount(parent)):
+            sel_model.select(
+                model.index(row, col, parent),
+                QItemSelectionModel.SelectionFlag.Select,
+            )
+            child_parent = model.index(row, 0, parent)
+            if model.rowCount(child_parent) > 0:
+                _select_children(child_parent)
+
+    _select_children(view.rootIndex())
+
+
+def select_all_cells(view: _CopyView) -> None:
+    """Select every cell in the view."""
+    sel_model = view.selectionModel()
+    model = view.model()
+    if sel_model is None or model is None:
+        return
+    sel_model.clearSelection()
+    col_count = model.columnCount()
+
+    def _select_children(parent: QModelIndex) -> None:
+        for row in range(model.rowCount(parent)):
+            for col in range(col_count):
+                sel_model.select(
+                    model.index(row, col, parent),
+                    QItemSelectionModel.SelectionFlag.Select,
+                )
+            child_parent = model.index(row, 0, parent)
+            if model.rowCount(child_parent) > 0:
+                _select_children(child_parent)
+
+    _select_children(view.rootIndex())

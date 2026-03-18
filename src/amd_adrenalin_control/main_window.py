@@ -6,8 +6,20 @@ import threading
 import time
 
 import psutil
-from PyQt6.QtCore import QCoreApplication, QPoint, Qt, QTimer
-from PyQt6.QtGui import QAction, QCloseEvent, QColor, QKeySequence
+from PyQt6.QtCore import (
+    QCoreApplication,
+    QItemSelectionModel,
+    QModelIndex,
+    QPoint,
+    Qt,
+    QTimer,
+)
+from PyQt6.QtGui import (
+    QAction,
+    QCloseEvent,
+    QColor,
+    QKeySequence,
+)
 from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
@@ -21,6 +33,8 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -48,6 +62,9 @@ from .ui_helpers import (
     copy_selected_cells,
     copy_selected_rows,
     require_qheader_view,
+    select_all_cells,
+    select_column,
+    select_row,
 )
 
 PATH_COLUMN_INDEX = 1
@@ -73,11 +90,13 @@ class MainWindow(QMainWindow):
         self.status_label.hide()
         self.status_badge = QLabel('● NOT RUNNING', self)
         self.status_badge.setObjectName('badge_stopped')
-        self.managed_section, self.managed_table = self._create_process_section(
+        self.managed_section, self.managed_tree = self._create_managed_section(
             self,
             'Radeon Software Managed',
             'Main RadeonSoftware.exe process and any child processes spawned from it.',
         )
+        self._managed_tree_expanded: dict[int, bool] = {}
+        self._managed_tree_selected_cells: dict[int, set[int]] = {}
         self.companion_section, self.companion_table = self._create_process_section(
             self,
             'AMD Companion Processes',
@@ -90,8 +109,8 @@ class MainWindow(QMainWindow):
             'Background service executables that provide'
             ' driver and system-level AMD functionality.',
         )
-        self._process_tables = [
-            self.managed_table,
+        self._process_tables: list[QTableWidget | QTreeWidget] = [
+            self.managed_tree,
             self.companion_table,
             self.service_table,
         ]
@@ -266,7 +285,10 @@ class MainWindow(QMainWindow):
                 ),
         )
 
-    def _enforce_single_table_selection(self, active_table: QTableWidget) -> None:
+    def _enforce_single_table_selection(
+        self,
+        active_table: QTableWidget | QTreeWidget,
+    ) -> None:
         """Clear selections in other process tables when active_table has selection."""
         if not active_table.selectedIndexes():
             return
@@ -333,6 +355,110 @@ class MainWindow(QMainWindow):
         section_layout.addWidget(description_label)
         section_layout.addWidget(table)
         return section, table
+
+    def _create_managed_section(
+        self,
+        parent: QWidget,
+        title: str,
+        description: str,
+    ) -> tuple[QWidget, QTreeWidget]:
+        """Create the managed process section with a tree widget for hierarchy."""
+        section = QWidget(parent)
+        section.setObjectName('process_section')
+        section.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+
+        section_layout = QVBoxLayout(section)
+        section_layout.setContentsMargins(12, 12, 12, 12)
+        section_layout.setSpacing(8)
+
+        label = QLabel(title, section)
+        label.setObjectName('section_header')
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        description_label = QLabel(description, section)
+        description_label.setObjectName('section_description')
+        description_label.setWordWrap(True)
+        description_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        tree = QTreeWidget(section)
+        tree.setObjectName('managed_tree')
+        tree.setColumnCount(6)
+        tree.setHeaderLabels(  # pyright: ignore[reportUnknownMemberType]
+            ['Name', 'Path', 'PID', 'CPU %', 'Memory', 'Status'],
+        )
+        if header := tree.header():
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+            header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        tree.setRootIsDecorated(True)
+        tree.setIndentation(20)
+        tree.setUniformRowHeights(True)
+        tree.setAnimated(False)
+        self._configure_managed_tree_interactions(tree)
+        tree.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        tree.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        section_layout.addWidget(label)
+        section_layout.addWidget(description_label)
+        section_layout.addWidget(tree)
+        return section, tree
+
+    def _configure_managed_tree_interactions(self, tree: QTreeWidget) -> None:
+        """Enable selection, copy, expand/collapse and context menu on the tree."""
+        tree.setMouseTracking(True)
+        if viewport := tree.viewport():
+            viewport.setMouseTracking(True)
+        tree.setEditTriggers(QTreeWidget.EditTrigger.NoEditTriggers)
+        tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
+        tree.setSelectionBehavior(QTreeWidget.SelectionBehavior.SelectItems)
+        tree.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        _ctx_signal = tree.customContextMenuRequested
+        _ctx_signal.connect(  # pyright: ignore[reportUnknownMemberType]
+            self._show_managed_tree_context_menu,
+        )
+
+        copy_action = QAction(tree)
+        copy_action.setShortcut(QKeySequence.StandardKey.Copy)
+        copy_action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        copy_action.triggered.connect(  # pyright: ignore[reportUnknownMemberType]
+            lambda _, current_tree=tree: copy_selected_cells(current_tree),
+        )
+        tree.addAction(copy_action)
+        tree.itemSelectionChanged.connect(  # pyright: ignore[reportUnknownMemberType]
+            lambda current_tree=tree:
+                self._enforce_single_table_selection(current_tree),
+        )
+        tree.expanded.connect(  # pyright: ignore[reportUnknownMemberType]
+            lambda _idx: self._resize_managed_tree(),
+        )
+        tree.collapsed.connect(  # pyright: ignore[reportUnknownMemberType]
+            lambda _idx: self._resize_managed_tree(),
+        )
+
+    def _resize_managed_tree(self) -> None:
+        """Fit the managed tree to its visible items so sections stay compact."""
+        tree = self.managed_tree
+        header = tree.header()
+        header_height = header.height() if header is not None else 0
+        row_height = 28
+        frame_height = tree.frameWidth() * 2
+
+        visible_count = 0
+        for i in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(i)
+            if item is not None and not item.isHidden():
+                visible_count += 1
+                if item.isExpanded():
+                    visible_count += item.childCount()
+
+        tree.setFixedHeight(
+            header_height + (visible_count * row_height) + frame_height,
+        )
 
     def _resize_process_table(self, table: QTableWidget) -> None:
         """Fit a process table to its rows so stacked sections stay compact."""
@@ -445,6 +571,213 @@ class MainWindow(QMainWindow):
             self._resize_process_table(table)
             return
         self._populate_process_table(table, processes, muted=muted)
+
+    def _save_managed_tree_expansion(self) -> None:
+        """Persist which top-level tree items are currently expanded."""
+        tree = self.managed_tree
+        for i in range(tree.topLevelItemCount()):
+            top_item = tree.topLevelItem(i)
+            if top_item is None:
+                continue
+            pid = top_item.data(NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole)
+            if isinstance(pid, int):
+                self._managed_tree_expanded[pid] = top_item.isExpanded()
+
+    def _restore_managed_tree_expansion(self) -> None:
+        """Re-apply saved expansion state to top-level tree items."""
+        tree = self.managed_tree
+        for i in range(tree.topLevelItemCount()):
+            top_item = tree.topLevelItem(i)
+            if top_item is None:
+                continue
+            pid = top_item.data(NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole)
+            expanded = (
+                self._managed_tree_expanded.get(pid, True)
+                if isinstance(pid, int)
+                else True
+            )
+            top_item.setExpanded(expanded)
+
+    def _save_managed_tree_selection(self) -> None:
+        """Persist which tree cells are selected, keyed by PID -> columns."""
+        tree = self.managed_tree
+        self._managed_tree_selected_cells = {}
+        sel_model = tree.selectionModel()
+        if sel_model is None:
+            return
+        for index in sel_model.selectedIndexes():
+            item = tree.itemFromIndex(index)
+            if item is None:
+                continue
+            pid = item.data(NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole)
+            if isinstance(pid, int):
+                self._managed_tree_selected_cells.setdefault(pid, set()).add(
+                    index.column(),
+                )
+
+    def _restore_managed_tree_selection(self) -> None:
+        """Re-apply saved per-cell selection to tree items matching saved PIDs."""
+        if not self._managed_tree_selected_cells:
+            return
+        tree = self.managed_tree
+        sel_model = tree.selectionModel()
+        if sel_model is None:
+            return
+        for i in range(tree.topLevelItemCount()):
+            top_item = tree.topLevelItem(i)
+            if top_item is None:
+                continue
+            self._restore_item_cell_selection(
+                tree, sel_model, top_item,
+            )
+            for j in range(top_item.childCount()):
+                child = top_item.child(j)
+                if child is not None:
+                    self._restore_item_cell_selection(
+                        tree, sel_model, child,
+                    )
+
+    def _restore_item_cell_selection(
+        self,
+        tree: QTreeWidget,
+        sel_model: QItemSelectionModel,
+        item: QTreeWidgetItem,
+    ) -> None:
+        """Select saved columns for a single tree item if its PID was saved."""
+        pid = item.data(NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole)
+        if not isinstance(pid, int):
+            return
+        cols = self._managed_tree_selected_cells.get(pid)
+        if cols is None:
+            return
+        for col in cols:
+            idx = tree.indexFromItem(item, col)
+            sel_model.select(idx, QItemSelectionModel.SelectionFlag.Select)
+
+    def _configure_managed_tree_item_columns(
+        self,
+        tree_item: QTreeWidgetItem,
+        values: list[str],
+        aligns: list[Qt.AlignmentFlag],
+        row_bg: QColor,
+        row: dict[str, object],
+    ) -> None:
+        """Set text, alignment, colors, tooltips, and data roles on a tree item."""
+        name = str(row.get('name', ''))
+        path_text = str(row.get('path', ''))
+        status = str(row.get('status', ''))
+        pid_value = row.get('pid_value')
+        indent_raw = row.get('indent', 0)
+        indent = indent_raw if isinstance(indent_raw, int) else 0
+
+        for col, (val, align) in enumerate(zip(values, aligns, strict=True)):
+            tree_item.setText(col, val)
+            tree_item.setTextAlignment(col, align)
+            tree_item.setBackground(col, row_bg)
+            if col == PATH_COLUMN_INDEX:
+                tree_item.setToolTip(col, path_text)
+            if col == NAME_COLUMN_INDEX:
+                tree_item.setData(col, COPY_TEXT_ROLE, name)
+            if col == NAME_COLUMN_INDEX and (
+                tooltip := PROCESS_TOOLTIPS.get(name.lower())
+            ):
+                tree_item.setToolTip(col, tooltip)
+            if col == NAME_COLUMN_INDEX and isinstance(pid_value, int):
+                tree_item.setData(col, Qt.ItemDataRole.UserRole, pid_value)
+            if col == STATUS_COLUMN_INDEX:
+                tree_item.setForeground(
+                    col,
+                    QColor(STATUS_COLORS.get(status, '#94a3b8')),
+                )
+            elif indent > 0:
+                tree_item.setForeground(col, QColor('#94a3b8'))
+
+    def _populate_managed_tree(
+        self,
+        rows: list[dict[str, object]],
+    ) -> None:
+        """Populate the managed tree widget from plain row snapshots."""
+        tree = self.managed_tree
+        self._save_managed_tree_expansion()
+        self._save_managed_tree_selection()
+
+        tree.setUpdatesEnabled(False)
+        tree.clear()
+
+        aligns = [
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+            Qt.AlignmentFlag.AlignCenter,
+        ]
+
+        current_parent: QTreeWidgetItem | None = None
+
+        for row_idx, row in enumerate(rows):
+            name = str(row['name'])
+            path_text = str(row['path'])
+            pid_text = str(row['pid_text'])
+            cpu_text = str(row['cpu_text'])
+            mem_text = str(row['mem_text'])
+            status = str(row['status'])
+            indent_raw = row['indent']
+            indent = indent_raw if isinstance(indent_raw, int) else 0
+
+            values = [name, path_text, pid_text, cpu_text, mem_text, status]
+            row_bg = (
+                QColor('#111827')
+                if row_idx % 2 == EVEN_ROW_REMAINDER
+                else QColor('#0d1220')
+            )
+
+            if indent == 0:
+                tree_item = QTreeWidgetItem(tree)
+                current_parent = tree_item
+            elif current_parent is not None:
+                tree_item = QTreeWidgetItem(current_parent)
+            else:
+                tree_item = QTreeWidgetItem(tree)
+
+            self._configure_managed_tree_item_columns(
+                tree_item, values, aligns, row_bg, row,
+            )
+
+        self._restore_managed_tree_expansion()
+        self._restore_managed_tree_selection()
+        self._resize_managed_tree()
+        tree.setUpdatesEnabled(True)
+
+    def _update_managed_section(
+        self,
+        processes: list[dict[str, object]],
+    ) -> None:
+        """Update the managed tree section with process data or an empty state."""
+        self.managed_section.setVisible(True)
+        if not processes:
+            tree = self.managed_tree
+            tree.clear()
+            empty_item = QTreeWidgetItem(tree)
+            empty_values = ['No active processes', '-', '-', '-', '-', 'idle']
+            empty_aligns = [
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                Qt.AlignmentFlag.AlignCenter,
+                Qt.AlignmentFlag.AlignCenter,
+                Qt.AlignmentFlag.AlignCenter,
+                Qt.AlignmentFlag.AlignCenter,
+                Qt.AlignmentFlag.AlignCenter,
+            ]
+            for col, (val, align) in enumerate(
+                zip(empty_values, empty_aligns, strict=True),
+            ):
+                empty_item.setText(col, val)
+                empty_item.setTextAlignment(col, align)
+                empty_item.setBackground(col, QColor('#0d1220'))
+                empty_item.setForeground(col, QColor('#64748b'))
+            self._resize_managed_tree()
+            return
+        self._populate_managed_tree(processes)
 
     def _process_pid_from_row(self, table: QTableWidget, row_idx: int) -> int | None:
         """Return the PID for a populated process row, or None for placeholder rows."""
@@ -643,32 +976,45 @@ class MainWindow(QMainWindow):
         )
         return answer == QMessageBox.StandardButton.Yes
 
+    def _handle_selection_action(
+        self,
+        chosen_action: QAction,
+        actions: dict[str, QAction | None],
+        view: QTableWidget | QTreeWidget,
+        *,
+        row_index: QModelIndex | None = None,
+        col_idx: int = 0,
+    ) -> bool:
+        """Handle select/copy actions common to both table and tree menus."""
+        if chosen_action == actions.get('copy_cells'):
+            copy_selected_cells(view)
+        elif chosen_action == actions.get('copy_rows'):
+            copy_selected_rows(view)
+        elif chosen_action == actions.get('select_row') and row_index is not None:
+            select_row(view, row_index)
+        elif chosen_action == actions.get('select_column'):
+            select_column(view, col_idx)
+        elif chosen_action == actions.get('select_all'):
+            select_all_cells(view)
+        else:
+            return False
+        return True
+
     def _handle_process_menu_action(
         self,
         *,
         chosen_action: QAction | None,
         actions: dict[str, QAction | None],
-        table: QTableWidget,
         pid: int | None,
         row_path: str | None = None,
     ) -> None:
         """Execute the selected process-row context menu action."""
-        copy_cells_action = actions['copy_cells']
-        copy_rows_action = actions['copy_rows']
-        open_location_action = actions.get('open_location')
-        terminate_process_action = actions['terminate_process']
-        terminate_tree_action = actions['terminate_tree']
-
         if chosen_action is None:
             return
 
-        if copy_cells_action is not None and chosen_action == copy_cells_action:
-            copy_selected_cells(table)
-            return
-
-        if copy_rows_action is not None and chosen_action == copy_rows_action:
-            copy_selected_rows(table)
-            return
+        open_location_action = actions.get('open_location')
+        terminate_process_action = actions['terminate_process']
+        terminate_tree_action = actions['terminate_tree']
 
         if (
             open_location_action is not None
@@ -722,6 +1068,10 @@ class MainWindow(QMainWindow):
         menu = QMenu(table)
         copy_cells_action = menu.addAction('Copy selected cells')
         copy_rows_action = menu.addAction('Copy selected rows')
+        menu.addSeparator()
+        select_row_action = menu.addAction('Select row')
+        select_column_action = menu.addAction('Select column')
+        select_all_action = menu.addAction('Select all')
         open_location_action = None
         terminate_process_action = None
         terminate_tree_action = None
@@ -738,21 +1088,183 @@ class MainWindow(QMainWindow):
             return
 
         chosen_action = menu.exec(viewport.mapToGlobal(position))
+        if chosen_action is None:
+            return
         actions: dict[str, QAction | None] = {
             'copy_cells': copy_cells_action,
             'copy_rows': copy_rows_action,
+            'select_row': select_row_action,
+            'select_column': select_column_action,
+            'select_all': select_all_action,
             'open_location': open_location_action,
             'terminate_process': terminate_process_action,
             'terminate_tree': terminate_tree_action,
         }
+        model = table.model()
+        row_index = model.index(row_idx, 0) if model is not None else None
+        if self._handle_selection_action(
+            chosen_action, actions, table,
+            row_index=row_index, col_idx=col_idx,
+        ):
+            return
         self._handle_process_menu_action(
             chosen_action=chosen_action,
             actions=actions,
-            table=table,
             pid=pid,
             row_path=row_path,
         )
         return
+
+    @staticmethod
+    def _tree_item_has_children(tree_item: QTreeWidgetItem, pid: int) -> bool:
+        """Check whether a tree item or its underlying process has children."""
+        if tree_item.childCount() > 0:
+            return True
+        with contextlib.suppress(psutil.Error):
+            return len(psutil.Process(pid).children(recursive=False)) > 0
+        return False
+
+    @staticmethod
+    def _find_tree_item_by_pid(
+        tree: QTreeWidget,
+        pid: int | None,
+    ) -> QTreeWidgetItem | None:
+        """Find a tree item matching *pid*, or None if not found."""
+        if pid is None:
+            return None
+        for i in range(tree.topLevelItemCount()):
+            top = tree.topLevelItem(i)
+            if top is None:
+                continue
+            if top.data(NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole) == pid:
+                return top
+            for j in range(top.childCount()):
+                child = top.child(j)
+                if (
+                    child is not None
+                    and child.data(
+                        NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole,
+                    ) == pid
+                ):
+                    return child
+        return None
+
+    def _show_managed_tree_context_menu(self, position: QPoint) -> None:
+        """Show row actions for a process item in the managed tree widget."""
+        tree = self.managed_tree
+        tree_item = tree.itemAt(position)
+        if tree_item is None:
+            return
+
+        header = tree.header()
+        col_idx = header.logicalIndexAt(position.x()) if header else 0
+        col_idx = max(col_idx, 0)
+
+        selection_model = tree.selectionModel()
+        if selection_model is not None and not selection_model.hasSelection():
+            tree.setCurrentItem(tree_item, col_idx)
+
+        pid: int | None = None
+        pid_data = tree_item.data(NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole)
+        if isinstance(pid_data, int):
+            pid = pid_data
+
+        path_text = tree_item.text(PATH_COLUMN_INDEX)
+        row_path = (
+            path_text
+            if path_text not in ('-', '', 'Executable path unavailable')
+            else None
+        )
+
+        menu = QMenu(tree)
+        copy_cells_action = menu.addAction('Copy selected cells')
+        copy_rows_action = menu.addAction('Copy selected rows')
+        menu.addSeparator()
+        select_row_action = menu.addAction('Select row')
+        select_column_action = menu.addAction('Select column')
+        select_all_action = menu.addAction('Select all')
+        open_location_action = None
+        terminate_process_action = None
+        terminate_tree_action = None
+        if row_path is not None:
+            menu.addSeparator()
+            open_location_action = menu.addAction('Open file location')
+        if pid is not None:
+            menu.addSeparator()
+            terminate_process_action = menu.addAction('Terminate process')
+            if self._tree_item_has_children(tree_item, pid):
+                terminate_tree_action = menu.addAction('Terminate process tree')
+        viewport = tree.viewport()
+        if viewport is None:
+            return
+
+        chosen_action = menu.exec(viewport.mapToGlobal(position))
+        if chosen_action is None:
+            return
+        actions: dict[str, QAction | None] = {
+            'copy_cells': copy_cells_action,
+            'copy_rows': copy_rows_action,
+            'select_row': select_row_action,
+            'select_column': select_column_action,
+            'select_all': select_all_action,
+            'open_location': open_location_action,
+            'terminate_process': terminate_process_action,
+            'terminate_tree': terminate_tree_action,
+        }
+        current_item = self._find_tree_item_by_pid(tree, pid)
+        row_index = (
+            tree.indexFromItem(current_item, 0)
+            if current_item is not None else None
+        )
+        if self._handle_selection_action(
+            chosen_action, actions, tree,
+            row_index=row_index, col_idx=col_idx,
+        ):
+            return
+        self._handle_managed_tree_menu_action(
+            chosen_action=chosen_action,
+            actions=actions,
+            pid=pid,
+            row_path=row_path,
+        )
+
+    def _handle_managed_tree_menu_action(
+        self,
+        *,
+        chosen_action: QAction | None,
+        actions: dict[str, QAction | None],
+        pid: int | None,
+        row_path: str | None,
+    ) -> None:
+        """Execute the selected managed-tree context menu action."""
+        if chosen_action is None:
+            return
+
+        if (
+            actions.get('open_location') is not None
+            and chosen_action == actions['open_location']
+            and row_path is not None
+        ):
+            subprocess.run(  # noqa: S603
+                ['explorer', '/select,', row_path],  # noqa: S607
+                check=False,
+            )
+            return
+        if (
+            actions['terminate_process'] is not None
+            and chosen_action == actions['terminate_process']
+            and pid is not None
+            and self._confirm_terminate(pid=pid, tree=False)
+        ):
+            self._terminate_single_process(pid)
+            return
+        if (
+            actions['terminate_tree'] is not None
+            and chosen_action == actions['terminate_tree']
+            and pid is not None
+            and self._confirm_terminate(pid=pid, tree=True)
+        ):
+            self._stop_single_process(pid)
 
     def _popup(self, title: str, text: str, icon: QMessageBox.Icon) -> None:
         """Show a styled in-app modal dialog for status and report messages."""
@@ -1063,11 +1575,7 @@ class MainWindow(QMainWindow):
                 and isinstance(service_rows, list)
             ):
                 self._set_monitor_badge(is_running=is_running)
-                self._update_process_section(
-                    self.managed_section,
-                    self.managed_table,
-                    managed_rows,
-                )
+                self._update_managed_section(managed_rows)
                 self._update_process_section(
                     self.companion_section,
                     self.companion_table,

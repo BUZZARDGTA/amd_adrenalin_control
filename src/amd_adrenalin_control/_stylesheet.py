@@ -157,4 +157,28 @@ QScrollArea#monitor_scroll {
     border: none;
     background-color: #0f141d;
 }
+QTreeWidget#managed_tree {
+    background-color: #0d1220;
+    color: #c9d8f0;
+    border: 1px solid #1e2d45;
+    border-radius: 6px;
+    font-size: 12px;
+    outline: 0;
+}
+QTreeWidget#managed_tree::item {
+    padding: 6px 10px;
+    border: none;
+}
+QTreeWidget#managed_tree::item:hover {
+    background-color: #233a5d;
+    color: #f4f8ff;
+}
+QTreeWidget#managed_tree::item:selected {
+    background-color: #1c2e4a;
+    color: #e9eef8;
+}
+QTreeWidget#managed_tree::item:selected:hover {
+    background-color: #294874;
+    color: #f4f8ff;
+}
 """
