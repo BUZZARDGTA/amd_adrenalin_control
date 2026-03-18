@@ -74,6 +74,33 @@ NAME_COLUMN_INDEX = 0
 EVEN_ROW_REMAINDER = 0
 PROCESS_CREATE_TIME_EPSILON = 0.001
 
+_COLOR_ROW_EVEN = QColor('#111827')
+_COLOR_ROW_ODD = QColor('#0d1220')
+_COLOR_MUTED = QColor('#94a3b8')
+_COLOR_EMPTY = QColor('#64748b')
+_STATUS_QCOLORS: dict[str, QColor] = {
+    status: QColor(color) for status, color in STATUS_COLORS.items()
+}
+
+_ALIGNS = (
+    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+    Qt.AlignmentFlag.AlignCenter,
+)
+
+_EMPTY_VALUES = ('No active processes', '-', '-', '-', '-', 'idle')
+_EMPTY_ALIGNS = (
+    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+    Qt.AlignmentFlag.AlignCenter,
+    Qt.AlignmentFlag.AlignCenter,
+    Qt.AlignmentFlag.AlignCenter,
+    Qt.AlignmentFlag.AlignCenter,
+    Qt.AlignmentFlag.AlignCenter,
+)
+
 
 class MainWindow(QMainWindow):
     """Main application window for controlling and monitoring AMD Adrenalin."""
@@ -82,6 +109,7 @@ class MainWindow(QMainWindow):
         """Initialise the main window, build the UI, and start the refresh timer."""
         super().__init__()
         self.process_path = RADEON_SOFTWARE_PATH
+        self._process_path_str = str(self.process_path.absolute())
         self.setWindowTitle(f'AMD Adrenalin Control v{__version__}')
         self.setMinimumSize(990, 765)
         self.resize(1130, 885)
@@ -486,15 +514,6 @@ class MainWindow(QMainWindow):
         table.setUpdatesEnabled(False)
         table.setRowCount(len(rows))
 
-        aligns = [
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-            Qt.AlignmentFlag.AlignCenter,
-        ]
-
         for row_idx, row in enumerate(rows):
             name = str(row['name'])
             raw_name = str(row.get('raw_name', name))
@@ -507,33 +526,31 @@ class MainWindow(QMainWindow):
             indent_raw = row['indent']
             indent = indent_raw if isinstance(indent_raw, int) else 0
 
-            values = [name, path_text, pid_text, cpu_text, mem_text, status]
+            values = (name, path_text, pid_text, cpu_text, mem_text, status)
             row_bg = (
-                QColor('#111827')
+                _COLOR_ROW_EVEN
                 if row_idx % 2 == EVEN_ROW_REMAINDER
-                else QColor('#0d1220')
+                else _COLOR_ROW_ODD
             )
 
-            for col, (val, align) in enumerate(zip(values, aligns, strict=True)):
+            for col, (val, align) in enumerate(zip(values, _ALIGNS, strict=True)):
                 item = QTableWidgetItem(val)
                 item.setTextAlignment(align)
                 item.setBackground(row_bg)
-                if col == PATH_COLUMN_INDEX:
-                    item.setToolTip(path_text)
                 if col == NAME_COLUMN_INDEX:
                     item.setData(COPY_TEXT_ROLE, raw_name)
-                if col == NAME_COLUMN_INDEX and (
-                    tooltip := PROCESS_TOOLTIPS.get(
-                        raw_name.lower(),
-                    )
-                ):
-                    item.setToolTip(tooltip)
-                if col == NAME_COLUMN_INDEX and isinstance(pid_value, int):
-                    item.setData(Qt.ItemDataRole.UserRole, pid_value)
+                    if tooltip := PROCESS_TOOLTIPS.get(raw_name.lower()):
+                        item.setToolTip(tooltip)
+                    if isinstance(pid_value, int):
+                        item.setData(Qt.ItemDataRole.UserRole, pid_value)
+                elif col == PATH_COLUMN_INDEX:
+                    item.setToolTip(path_text)
                 if col == STATUS_COLUMN_INDEX:
-                    item.setForeground(QColor(STATUS_COLORS.get(status, '#94a3b8')))
+                    item.setForeground(
+                        _STATUS_QCOLORS.get(status, _COLOR_MUTED),
+                    )
                 elif muted or indent > 0:
-                    item.setForeground(QColor('#94a3b8'))
+                    item.setForeground(_COLOR_MUTED)
                 table.setItem(row_idx, col, item)
 
         self._resize_process_table(table)
@@ -551,22 +568,13 @@ class MainWindow(QMainWindow):
         section.setVisible(True)
         if not processes:
             table.setRowCount(1)
-            empty_values = ['No active processes', '-', '-', '-', '-', 'idle']
-            empty_aligns = [
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                Qt.AlignmentFlag.AlignCenter,
-                Qt.AlignmentFlag.AlignCenter,
-                Qt.AlignmentFlag.AlignCenter,
-                Qt.AlignmentFlag.AlignCenter,
-                Qt.AlignmentFlag.AlignCenter,
-            ]
             for col, (val, align) in enumerate(
-                zip(empty_values, empty_aligns, strict=True),
+                zip(_EMPTY_VALUES, _EMPTY_ALIGNS, strict=True),
             ):
                 item = QTableWidgetItem(val)
                 item.setTextAlignment(align)
-                item.setBackground(QColor('#0d1220'))
-                item.setForeground(QColor('#64748b'))
+                item.setBackground(_COLOR_ROW_ODD)
+                item.setForeground(_COLOR_EMPTY)
                 table.setItem(0, col, item)
             self._resize_process_table(table)
             return
@@ -657,8 +665,8 @@ class MainWindow(QMainWindow):
     def _configure_managed_tree_item_columns(
         self,
         tree_item: QTreeWidgetItem,
-        values: list[str],
-        aligns: list[Qt.AlignmentFlag],
+        values: tuple[str, ...],
+        aligns: tuple[Qt.AlignmentFlag, ...],
         row_bg: QColor,
         row: dict[str, object],
     ) -> None:
@@ -674,23 +682,21 @@ class MainWindow(QMainWindow):
             tree_item.setText(col, val)
             tree_item.setTextAlignment(col, align)
             tree_item.setBackground(col, row_bg)
-            if col == PATH_COLUMN_INDEX:
-                tree_item.setToolTip(col, path_text)
             if col == NAME_COLUMN_INDEX:
                 tree_item.setData(col, COPY_TEXT_ROLE, name)
-            if col == NAME_COLUMN_INDEX and (
-                tooltip := PROCESS_TOOLTIPS.get(name.lower())
-            ):
-                tree_item.setToolTip(col, tooltip)
-            if col == NAME_COLUMN_INDEX and isinstance(pid_value, int):
-                tree_item.setData(col, Qt.ItemDataRole.UserRole, pid_value)
+                if tooltip := PROCESS_TOOLTIPS.get(name.lower()):
+                    tree_item.setToolTip(col, tooltip)
+                if isinstance(pid_value, int):
+                    tree_item.setData(col, Qt.ItemDataRole.UserRole, pid_value)
+            elif col == PATH_COLUMN_INDEX:
+                tree_item.setToolTip(col, path_text)
             if col == STATUS_COLUMN_INDEX:
                 tree_item.setForeground(
                     col,
-                    QColor(STATUS_COLORS.get(status, '#94a3b8')),
+                    _STATUS_QCOLORS.get(status, _COLOR_MUTED),
                 )
             elif indent > 0:
-                tree_item.setForeground(col, QColor('#94a3b8'))
+                tree_item.setForeground(col, _COLOR_MUTED)
 
     def _populate_managed_tree(
         self,
@@ -704,15 +710,6 @@ class MainWindow(QMainWindow):
         tree.setUpdatesEnabled(False)
         tree.clear()
 
-        aligns = [
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-            Qt.AlignmentFlag.AlignCenter,
-        ]
-
         current_parent: QTreeWidgetItem | None = None
 
         for row_idx, row in enumerate(rows):
@@ -725,11 +722,11 @@ class MainWindow(QMainWindow):
             indent_raw = row['indent']
             indent = indent_raw if isinstance(indent_raw, int) else 0
 
-            values = [name, path_text, pid_text, cpu_text, mem_text, status]
+            values = (name, path_text, pid_text, cpu_text, mem_text, status)
             row_bg = (
-                QColor('#111827')
+                _COLOR_ROW_EVEN
                 if row_idx % 2 == EVEN_ROW_REMAINDER
-                else QColor('#0d1220')
+                else _COLOR_ROW_ODD
             )
 
             if indent == 0:
@@ -741,7 +738,7 @@ class MainWindow(QMainWindow):
                 tree_item = QTreeWidgetItem(tree)
 
             self._configure_managed_tree_item_columns(
-                tree_item, values, aligns, row_bg, row,
+                tree_item, values, _ALIGNS, row_bg, row,
             )
 
         self._restore_managed_tree_expansion()
@@ -759,22 +756,13 @@ class MainWindow(QMainWindow):
             tree = self.managed_tree
             tree.clear()
             empty_item = QTreeWidgetItem(tree)
-            empty_values = ['No active processes', '-', '-', '-', '-', 'idle']
-            empty_aligns = [
-                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                Qt.AlignmentFlag.AlignCenter,
-                Qt.AlignmentFlag.AlignCenter,
-                Qt.AlignmentFlag.AlignCenter,
-                Qt.AlignmentFlag.AlignCenter,
-                Qt.AlignmentFlag.AlignCenter,
-            ]
             for col, (val, align) in enumerate(
-                zip(empty_values, empty_aligns, strict=True),
+                zip(_EMPTY_VALUES, _EMPTY_ALIGNS, strict=True),
             ):
                 empty_item.setText(col, val)
                 empty_item.setTextAlignment(col, align)
-                empty_item.setBackground(col, QColor('#0d1220'))
-                empty_item.setForeground(col, QColor('#64748b'))
+                empty_item.setBackground(col, _COLOR_ROW_ODD)
+                empty_item.setForeground(col, _COLOR_EMPTY)
             self._resize_managed_tree()
             return
         self._populate_managed_tree(processes)
@@ -1526,12 +1514,13 @@ class MainWindow(QMainWindow):
 
     def _set_monitor_badge(self, *, is_running: bool) -> None:
         """Update the monitor badge text and style based on running state."""
-        if is_running:
-            self.status_badge.setText('● RUNNING')
-            self.status_badge.setObjectName('badge_running')
-        else:
-            self.status_badge.setText('● NOT RUNNING')
-            self.status_badge.setObjectName('badge_stopped')
+        new_name = 'badge_running' if is_running else 'badge_stopped'
+        if self.status_badge.objectName() == new_name:
+            return
+        self.status_badge.setText(
+            '● RUNNING' if is_running else '● NOT RUNNING',
+        )
+        self.status_badge.setObjectName(new_name)
         self.status_badge.setStyle(self.status_badge.style())
 
     def _schedule_refresh(self) -> None:
@@ -1543,7 +1532,7 @@ class MainWindow(QMainWindow):
         self._refresh_in_flight = True
         worker = threading.Thread(
             target=self._run_refresh_worker,
-            args=(str(self.process_path),),
+            args=(self._process_path_str,),
             daemon=True,
             name='proc-refresh',
         )

@@ -7,8 +7,9 @@ import psutil
 
 def get_pid_by_path(filepath: Path) -> int | None:
     """Return the PID of the process matching filepath, or None."""
+    target = str(filepath.absolute())
     for process in psutil.process_iter(['pid', 'exe']):
-        if process.info['exe'] == str(filepath.absolute()):
+        if process.info['exe'] == target:
             return process.pid
     return None
 
@@ -51,20 +52,10 @@ def _kill_process(
 
 def _collect_alive_after_wait(
     children: list[psutil.Process],
-    denied_pids: set[int],
 ) -> list[psutil.Process]:
     """Wait briefly for children to exit and return those still alive."""
-    alive_children: list[psutil.Process] = []
-    for child in children:
-        try:
-            child.wait(timeout=3)
-        except psutil.TimeoutExpired:
-            alive_children.append(child)
-        except psutil.NoSuchProcess:
-            continue
-        except psutil.AccessDenied:
-            denied_pids.add(child.pid)
-    return alive_children
+    _, alive = psutil.wait_procs(children, timeout=3)
+    return list(alive)
 
 
 def _get_process_or_none(pid: int, denied_pids: set[int]) -> psutil.Process | None:
@@ -122,7 +113,7 @@ def terminate_process_tree(pid: int) -> tuple[set[int], set[int]]:
     for child in children:
         _terminate_process(child, stopped_pids, denied_pids)
 
-    alive_children = _collect_alive_after_wait(children, denied_pids)
+    alive_children = _collect_alive_after_wait(children)
     for child in alive_children:
         _kill_process(child, stopped_pids, denied_pids)
 

@@ -1,12 +1,9 @@
 """Background snapshot helpers for live process monitor refreshes."""
 
-from pathlib import Path
-
 import psutil
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from .constants import COMPANION_NAMES, SERVICE_NAMES
-from .process_ops import get_pid_by_path
 
 
 class RefreshBridge(QObject):
@@ -22,8 +19,7 @@ def _safe_process_name_lower(proc: psutil.Process) -> str | None:
         return info_name.lower()
 
     try:
-        with proc.oneshot():
-            return proc.name().lower()
+        return proc.name().lower()
     except (psutil.NoSuchProcess, psutil.AccessDenied):
         return None
 
@@ -31,18 +27,19 @@ def _safe_process_name_lower(proc: psutil.Process) -> str | None:
 def build_row_snapshot(proc: psutil.Process, indent: int) -> dict[str, object]:
     """Build a plain-data row snapshot for a process."""
     try:
-        name = proc.name()
-        pid_text = str(proc.pid)
-        cpu_text = f'{proc.cpu_percent(interval=None):.1f} %'
-        mem_mb = proc.memory_info().rss / (1024 * 1024)
-        mem_text = f'{mem_mb:.1f} MB'
-        status = str(proc.status())
-        try:
-            exe_path = proc.exe()
-            path_text = exe_path or 'Executable path unavailable'
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            path_text = 'Executable path unavailable'
-        pid_value: int | None = proc.pid
+        with proc.oneshot():
+            name = proc.name()
+            pid_text = str(proc.pid)
+            cpu_text = f'{proc.cpu_percent(interval=None):.1f} %'
+            mem_mb = proc.memory_info().rss / (1024 * 1024)
+            mem_text = f'{mem_mb:.1f} MB'
+            status = str(proc.status())
+            try:
+                exe_path = proc.exe()
+                path_text = exe_path or 'Executable path unavailable'
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                path_text = 'Executable path unavailable'
+            pid_value: int | None = proc.pid
     except psutil.NoSuchProcess:
         name, path_text, pid_text, cpu_text, mem_text, status = (
             '<ended>', '<unavailable>', '-', '-', '-', 'gone',
@@ -74,13 +71,25 @@ def build_row_snapshot(proc: psutil.Process, indent: int) -> dict[str, object]:
 def collect_running_processes() -> dict[int, psutil.Process]:
     """Collect running processes keyed by PID and warm up CPU counters."""
     all_procs: dict[int, psutil.Process] = {}
-    for proc in psutil.process_iter(['pid', 'name']):
+    for proc in psutil.process_iter(['pid', 'name', 'exe']):
         try:
             all_procs[proc.pid] = proc
             proc.cpu_percent(interval=None)
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
     return all_procs
+
+
+def _find_pid_by_path(
+    all_procs: dict[int, psutil.Process],
+    target: str,
+) -> int | None:
+    """Return the PID matching target exe path from an already-collected dict."""
+    for proc in all_procs.values():
+        exe = proc.info.get('exe')
+        if exe == target:
+            return proc.pid
+    return None
 
 
 def build_managed_rows(
@@ -106,8 +115,8 @@ def split_companion_and_service_rows(
     managed_pids: set[int],
 ) -> tuple[list[psutil.Process], list[psutil.Process]]:
     """Return companion and service process lists excluding managed rows."""
-    companion_rows: list[psutil.Process] = []
-    service_rows: list[psutil.Process] = []
+    companion_rows: list[tuple[psutil.Process, str]] = []
+    service_rows: list[tuple[psutil.Process, str]] = []
 
     for proc in all_procs.values():
         if proc.pid in managed_pids:
@@ -118,20 +127,22 @@ def split_companion_and_service_rows(
             continue
 
         if name_lower in COMPANION_NAMES:
-            companion_rows.append(proc)
+            companion_rows.append((proc, name_lower))
         elif name_lower in SERVICE_NAMES:
-            service_rows.append(proc)
+            service_rows.append((proc, name_lower))
 
-    companion_rows.sort(key=lambda proc: _safe_process_name_lower(proc) or '')
-    service_rows.sort(key=lambda proc: _safe_process_name_lower(proc) or '')
-    return companion_rows, service_rows
+    companion_rows.sort(key=lambda pair: pair[1])
+    service_rows.sort(key=lambda pair: pair[1])
+    return (
+        [proc for proc, _ in companion_rows],
+        [proc for proc, _ in service_rows],
+    )
 
 
 def collect_refresh_snapshot(process_path: str) -> dict[str, object]:
     """Collect all data needed to refresh monitor tables in a worker thread."""
-    pid = get_pid_by_path(Path(process_path))
-
     all_procs = collect_running_processes()
+    pid = _find_pid_by_path(all_procs, process_path)
     main_rows, managed_pids = build_managed_rows(pid)
     companion_rows, service_rows = (
         split_companion_and_service_rows(
