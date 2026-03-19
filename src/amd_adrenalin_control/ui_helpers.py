@@ -1,6 +1,6 @@
 """UI-specific runtime type validation helpers."""
 
-from PyQt6.QtCore import QItemSelectionModel, QModelIndex, Qt
+from PyQt6.QtCore import QAbstractItemModel, QItemSelectionModel, QModelIndex, Qt
 from PyQt6.QtWidgets import (
     QApplication,
     QHeaderView,
@@ -125,6 +125,24 @@ def select_row(view: _CopyView, index: QModelIndex) -> None:
         )
 
 
+def _recursive_select(
+    model: QAbstractItemModel,
+    sel_model: QItemSelectionModel,
+    parent: QModelIndex,
+    columns: range,
+) -> None:
+    """Recursively select *columns* for every row under *parent*."""
+    for row in range(model.rowCount(parent)):
+        for col in columns:
+            sel_model.select(
+                model.index(row, col, parent),
+                QItemSelectionModel.SelectionFlag.Select,
+            )
+        child_parent = model.index(row, 0, parent)
+        if model.rowCount(child_parent) > 0:
+            _recursive_select(model, sel_model, child_parent, columns)
+
+
 def select_column(view: _CopyView, col: int) -> None:
     """Select all visible cells in column *col*."""
     sel_model = view.selectionModel()
@@ -132,18 +150,7 @@ def select_column(view: _CopyView, col: int) -> None:
     if sel_model is None or model is None:
         return
     sel_model.clearSelection()
-
-    def _select_children(parent: QModelIndex) -> None:
-        for row in range(model.rowCount(parent)):
-            sel_model.select(
-                model.index(row, col, parent),
-                QItemSelectionModel.SelectionFlag.Select,
-            )
-            child_parent = model.index(row, 0, parent)
-            if model.rowCount(child_parent) > 0:
-                _select_children(child_parent)
-
-    _select_children(view.rootIndex())
+    _recursive_select(model, sel_model, view.rootIndex(), range(col, col + 1))
 
 
 def select_all_cells(view: _CopyView) -> None:
@@ -153,17 +160,4 @@ def select_all_cells(view: _CopyView) -> None:
     if sel_model is None or model is None:
         return
     sel_model.clearSelection()
-    col_count = model.columnCount()
-
-    def _select_children(parent: QModelIndex) -> None:
-        for row in range(model.rowCount(parent)):
-            for col in range(col_count):
-                sel_model.select(
-                    model.index(row, col, parent),
-                    QItemSelectionModel.SelectionFlag.Select,
-                )
-            child_parent = model.index(row, 0, parent)
-            if model.rowCount(child_parent) > 0:
-                _select_children(child_parent)
-
-    _select_children(view.rootIndex())
+    _recursive_select(model, sel_model, view.rootIndex(), range(model.columnCount()))

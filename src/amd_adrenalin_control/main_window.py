@@ -4,6 +4,8 @@ import contextlib
 import subprocess
 import threading
 import time
+from collections.abc import Callable
+from typing import NamedTuple
 
 import psutil
 from PyQt6.QtCore import (
@@ -111,8 +113,8 @@ class MainWindow(QMainWindow):
         self.process_path = RADEON_SOFTWARE_PATH
         self._process_path_str = str(self.process_path.absolute())
         self.setWindowTitle(f'AMD Adrenalin Control v{__version__}')
-        self.setMinimumSize(990, 765)
-        self.resize(1130, 885)
+        self.setMinimumSize(990, 705)
+        self.resize(1130, 825)
 
         self.status_label = QLabel('', self)
         self.status_label.hide()
@@ -185,47 +187,55 @@ class MainWindow(QMainWindow):
         self._apply_stylesheet()
         self._show_process_sections()
 
+    def _create_action_button(
+        self,
+        text: str,
+        tooltip: str,
+        callback: Callable[[], None],
+        *,
+        obj_name: str | None = None,
+        height: int = 40,
+    ) -> QPushButton:
+        """Create a styled action button wired to a callback."""
+        btn = QPushButton(text, self)
+        btn.setMinimumHeight(height)
+        btn.setToolTip(tooltip)
+        if obj_name is not None:
+            btn.setObjectName(obj_name)
+        btn.clicked.connect(  # pyright: ignore[reportUnknownMemberType]
+            callback,
+        )
+        return btn
+
     def _build_top_controls(self, layout: QGridLayout) -> None:
         """Build status labels and top action buttons."""
-        restart_btn = QPushButton('Restart Adrenalin', self)
-        restart_btn.setMinimumHeight(40)
-        restart_btn.setToolTip(
+        restart_btn = self._create_action_button(
+            'Restart Adrenalin',
             'Stops Radeon Software if running,'
             ' then starts a fresh instance.',
-        )
-        restart_btn.clicked.connect(  # pyright: ignore[reportUnknownMemberType]
             self.restart_software,
         )
-
-        start_btn = QPushButton('Start Adrenalin', self)
-        start_btn.setMinimumHeight(40)
-        start_btn.setObjectName('start_btn')
-        start_btn.setToolTip('Starts Radeon Software if it is not already running.')
-        start_btn.clicked.connect(  # pyright: ignore[reportUnknownMemberType]
+        start_btn = self._create_action_button(
+            'Start Adrenalin',
+            'Starts Radeon Software if it is not already running.',
             self.start_only,
+            obj_name='start_btn',
         )
-
-        stop_btn = QPushButton('Stop Adrenalin', self)
-        stop_btn.setMinimumHeight(40)
-        stop_btn.setObjectName('stop_btn')
-        stop_btn.setToolTip(
+        stop_btn = self._create_action_button(
+            'Stop Adrenalin',
             'Stops the main Radeon Software process'
             ' and its child processes.',
-        )
-        stop_btn.clicked.connect(  # pyright: ignore[reportUnknownMemberType]
             self.stop_only,
+            obj_name='stop_btn',
         )
-
-        stop_all_btn = QPushButton('Stop all AMD processes', self)
-        stop_all_btn.setMinimumHeight(38)
-        stop_all_btn.setObjectName('stop_all_btn')
-        stop_all_btn.setToolTip(
+        stop_all_btn = self._create_action_button(
+            'Stop all AMD processes',
             'Stops Radeon Software and all monitored'
             ' AMD helper/service processes,'
             ' including their child processes.',
-        )
-        stop_all_btn.clicked.connect(  # pyright: ignore[reportUnknownMemberType]
             self.stop_all,
+            obj_name='stop_all_btn',
+            height=38,
         )
 
         layout.addWidget(restart_btn, 0, 0)
@@ -281,35 +291,40 @@ class MainWindow(QMainWindow):
         self.companion_section.show()
         self.service_section.show()
 
+    def _configure_common_view_interactions(
+        self,
+        view: QTableWidget | QTreeWidget,
+    ) -> None:
+        """Apply shared selection, copy, and tracking settings to a view."""
+        view.setMouseTracking(True)
+        if viewport := view.viewport():
+            viewport.setMouseTracking(True)
+        view.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        view.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        view.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
+        view.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+
+        copy_action = QAction(view)
+        copy_action.setShortcut(QKeySequence.StandardKey.Copy)
+        copy_action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        copy_action.triggered.connect(  # pyright: ignore[reportUnknownMemberType]
+            lambda _, current_view=view: copy_selected_cells(current_view),
+        )
+        view.addAction(copy_action)
+        view.itemSelectionChanged.connect(  # pyright: ignore[reportUnknownMemberType]
+            lambda current_view=view:
+                self._enforce_single_table_selection(current_view),
+        )
+
     def _configure_process_table_interactions(self, table: QTableWidget) -> None:
         """Enable row selection, copy, and row context menu actions."""
-        table.setMouseTracking(True)
-        if viewport := table.viewport():
-            viewport.setMouseTracking(True)
-        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
-        table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectItems)
-        table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._configure_common_view_interactions(table)
         _ctx_signal = table.customContextMenuRequested
         _ctx_signal.connect(  # pyright: ignore[reportUnknownMemberType]
             lambda pos, current_table=table:
                 self._show_process_context_menu(
                     current_table, pos,
-                ),
-        )
-
-        copy_action = QAction(table)
-        copy_action.setShortcut(QKeySequence.StandardKey.Copy)
-        copy_action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        copy_action.triggered.connect(  # pyright: ignore[reportUnknownMemberType]
-            lambda _, current_table=table: copy_selected_cells(current_table),
-        )
-        table.addAction(copy_action)
-        table.itemSelectionChanged.connect(  # pyright: ignore[reportUnknownMemberType]
-            lambda current_table=table:
-                self._enforce_single_table_selection(
-                    current_table,
                 ),
         )
 
@@ -358,12 +373,7 @@ class MainWindow(QMainWindow):
             ['Name', 'Path', 'PID', 'CPU %', 'Memory', 'Status'],
         )
         if h_header := table.horizontalHeader():
-            h_header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-            h_header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-            h_header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-            h_header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-            h_header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-            h_header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+            self._configure_section_header_resize(h_header)
         if v_header := table.verticalHeader():
             v_header.hide()
             v_header.setMinimumWidth(0)
@@ -415,12 +425,7 @@ class MainWindow(QMainWindow):
             ['Name', 'Path', 'PID', 'CPU %', 'Memory', 'Status'],
         )
         if header := tree.header():
-            header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-            header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-            header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-            header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-            header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-            header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+            self._configure_section_header_resize(header)
         tree.setRootIsDecorated(True)
         tree.setIndentation(20)
         tree.setUniformRowHeights(True)
@@ -437,29 +442,10 @@ class MainWindow(QMainWindow):
 
     def _configure_managed_tree_interactions(self, tree: QTreeWidget) -> None:
         """Enable selection, copy, expand/collapse and context menu on the tree."""
-        tree.setMouseTracking(True)
-        if viewport := tree.viewport():
-            viewport.setMouseTracking(True)
-        tree.setEditTriggers(QTreeWidget.EditTrigger.NoEditTriggers)
-        tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
-        tree.setSelectionBehavior(QTreeWidget.SelectionBehavior.SelectItems)
-        tree.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._configure_common_view_interactions(tree)
         _ctx_signal = tree.customContextMenuRequested
         _ctx_signal.connect(  # pyright: ignore[reportUnknownMemberType]
             self._show_managed_tree_context_menu,
-        )
-
-        copy_action = QAction(tree)
-        copy_action.setShortcut(QKeySequence.StandardKey.Copy)
-        copy_action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        copy_action.triggered.connect(  # pyright: ignore[reportUnknownMemberType]
-            lambda _, current_tree=tree: copy_selected_cells(current_tree),
-        )
-        tree.addAction(copy_action)
-        tree.itemSelectionChanged.connect(  # pyright: ignore[reportUnknownMemberType]
-            lambda current_tree=tree:
-                self._enforce_single_table_selection(current_tree),
         )
         tree.expanded.connect(  # pyright: ignore[reportUnknownMemberType]
             lambda _idx: self._resize_managed_tree(),
@@ -812,16 +798,17 @@ class MainWindow(QMainWindow):
                 create_times[pid] = psutil.Process(pid).create_time()
         return create_times
 
-    def _filter_denied_pids_still_running(
+    def _verified_denied_pids(
         self,
         denied_pids: set[int],
-        target_create_times: dict[int, float | None],
+        target_pids: set[int],
     ) -> set[int]:
-        """Keep denied pids only when the same original process is still running."""
+        """Capture create times and keep denied PIDs still running."""
+        create_times = self._capture_target_create_times(target_pids)
         return {
             pid
             for pid in denied_pids
-            if self._is_same_process_still_running(pid, target_create_times.get(pid))
+            if self._is_same_process_still_running(pid, create_times.get(pid))
         }
 
     def _classify_attempted_pids(
@@ -914,11 +901,8 @@ class MainWindow(QMainWindow):
 
     def _stop_single_process(self, pid: int) -> None:
         """Terminate a single process tree by PID and refresh the display."""
-        target_create_times = self._capture_target_create_times({pid})
         _, denied_pids = terminate_process_tree(pid)
-        denied_pids = self._filter_denied_pids_still_running(
-            denied_pids, target_create_times,
-        )
+        denied_pids = self._verified_denied_pids(denied_pids, {pid})
         self._refresh_process_info()
         if denied_pids:
             self._offer_uac_elevation(
@@ -927,6 +911,14 @@ class MainWindow(QMainWindow):
                     ' to terminate the selected process tree.'
                 ),
             )
+
+    @staticmethod
+    def _configure_section_header_resize(header: QHeaderView) -> None:
+        """Set standard column resize modes for process section headers."""
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        for col in (2, 3, 4, 5):
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
 
     def _row_has_children(self, table: QTableWidget, row_idx: int) -> bool:
         """Check whether the process for a row currently has direct children."""
@@ -1032,13 +1024,84 @@ class MainWindow(QMainWindow):
         ):
             self._stop_single_process(pid)
 
+    def _build_process_context_menu(
+        self,
+        parent: QWidget,
+        *,
+        row_path: str | None,
+        pid: int | None,
+        has_children: bool,
+    ) -> tuple[QMenu, dict[str, QAction | None]]:
+        """Build the standard process context menu and return (menu, actions)."""
+        menu = QMenu(parent)
+        actions: dict[str, QAction | None] = {
+            'copy_cells': menu.addAction('Copy selected cells'),
+            'copy_rows': menu.addAction('Copy selected rows'),
+        }
+        menu.addSeparator()
+        actions['select_row'] = menu.addAction('Select row')
+        actions['select_column'] = menu.addAction('Select column')
+        actions['select_all'] = menu.addAction('Select all')
+        actions['open_location'] = None
+        actions['terminate_process'] = None
+        actions['terminate_tree'] = None
+        if row_path is not None:
+            menu.addSeparator()
+            actions['open_location'] = menu.addAction('Open file location')
+        if pid is not None:
+            menu.addSeparator()
+            actions['terminate_process'] = menu.addAction('Terminate process')
+            if has_children:
+                actions['terminate_tree'] = menu.addAction(
+                    'Terminate process tree',
+                )
+        return menu, actions
+
+    class _MenuContext(NamedTuple):
+        """Bundled context for a process context menu invocation."""
+
+        pid: int | None
+        row_path: str | None
+        has_children: bool
+        row_index: QModelIndex | None
+        col_idx: int
+
+    def _dispatch_context_menu(
+        self,
+        view: QTableWidget | QTreeWidget,
+        position: QPoint,
+        ctx: _MenuContext,
+    ) -> None:
+        """Build, show, and dispatch a process context menu."""
+        menu, actions = self._build_process_context_menu(
+            view, row_path=ctx.row_path, pid=ctx.pid,
+            has_children=ctx.has_children,
+        )
+        viewport = view.viewport()
+        if viewport is None:
+            return
+
+        chosen_action = menu.exec(viewport.mapToGlobal(position))
+        if chosen_action is None:
+            return
+        if self._handle_selection_action(
+            chosen_action, actions, view,
+            row_index=ctx.row_index, col_idx=ctx.col_idx,
+        ):
+            return
+        self._handle_process_menu_action(
+            chosen_action=chosen_action,
+            actions=actions,
+            pid=ctx.pid,
+            row_path=ctx.row_path,
+        )
+
     def _show_process_context_menu(self, table: QTableWidget, position: QPoint) -> None:
         """Show row actions for a real process row under the mouse."""
         row_idx = table.rowAt(position.y())
         if row_idx < 0:
             return
-        col_idx = table.columnAt(position.x())
-        col_idx = max(col_idx, 0)
+        col_idx = max(table.columnAt(position.x()), 0)
 
         selection_model = table.selectionModel()
         if selection_model is not None and not selection_model.hasSelection():
@@ -1052,56 +1115,17 @@ class MainWindow(QMainWindow):
             and path_item.text() not in ('-', '')
             else None
         )
-
-        menu = QMenu(table)
-        copy_cells_action = menu.addAction('Copy selected cells')
-        copy_rows_action = menu.addAction('Copy selected rows')
-        menu.addSeparator()
-        select_row_action = menu.addAction('Select row')
-        select_column_action = menu.addAction('Select column')
-        select_all_action = menu.addAction('Select all')
-        open_location_action = None
-        terminate_process_action = None
-        terminate_tree_action = None
-        if row_path is not None:
-            menu.addSeparator()
-            open_location_action = menu.addAction('Open file location')
-        if pid is not None:
-            menu.addSeparator()
-            terminate_process_action = menu.addAction('Terminate process')
-            if self._row_has_children(table, row_idx):
-                terminate_tree_action = menu.addAction('Terminate process tree')
-        viewport = table.viewport()
-        if viewport is None:
-            return
-
-        chosen_action = menu.exec(viewport.mapToGlobal(position))
-        if chosen_action is None:
-            return
-        actions: dict[str, QAction | None] = {
-            'copy_cells': copy_cells_action,
-            'copy_rows': copy_rows_action,
-            'select_row': select_row_action,
-            'select_column': select_column_action,
-            'select_all': select_all_action,
-            'open_location': open_location_action,
-            'terminate_process': terminate_process_action,
-            'terminate_tree': terminate_tree_action,
-        }
         model = table.model()
-        row_index = model.index(row_idx, 0) if model is not None else None
-        if self._handle_selection_action(
-            chosen_action, actions, table,
-            row_index=row_index, col_idx=col_idx,
-        ):
-            return
-        self._handle_process_menu_action(
-            chosen_action=chosen_action,
-            actions=actions,
-            pid=pid,
-            row_path=row_path,
+        self._dispatch_context_menu(
+            table, position,
+            self._MenuContext(
+                pid=pid,
+                row_path=row_path,
+                has_children=self._row_has_children(table, row_idx),
+                row_index=model.index(row_idx, 0) if model is not None else None,
+                col_idx=col_idx,
+            ),
         )
-        return
 
     @staticmethod
     def _tree_item_has_children(tree_item: QTreeWidgetItem, pid: int) -> bool:
@@ -1145,8 +1169,7 @@ class MainWindow(QMainWindow):
             return
 
         header = tree.header()
-        col_idx = header.logicalIndexAt(position.x()) if header else 0
-        col_idx = max(col_idx, 0)
+        col_idx = max(header.logicalIndexAt(position.x()) if header else 0, 0)
 
         selection_model = tree.selectionModel()
         if selection_model is not None and not selection_model.hasSelection():
@@ -1163,96 +1186,23 @@ class MainWindow(QMainWindow):
             if path_text not in ('-', '', 'Executable path unavailable')
             else None
         )
-
-        menu = QMenu(tree)
-        copy_cells_action = menu.addAction('Copy selected cells')
-        copy_rows_action = menu.addAction('Copy selected rows')
-        menu.addSeparator()
-        select_row_action = menu.addAction('Select row')
-        select_column_action = menu.addAction('Select column')
-        select_all_action = menu.addAction('Select all')
-        open_location_action = None
-        terminate_process_action = None
-        terminate_tree_action = None
-        if row_path is not None:
-            menu.addSeparator()
-            open_location_action = menu.addAction('Open file location')
-        if pid is not None:
-            menu.addSeparator()
-            terminate_process_action = menu.addAction('Terminate process')
-            if self._tree_item_has_children(tree_item, pid):
-                terminate_tree_action = menu.addAction('Terminate process tree')
-        viewport = tree.viewport()
-        if viewport is None:
-            return
-
-        chosen_action = menu.exec(viewport.mapToGlobal(position))
-        if chosen_action is None:
-            return
-        actions: dict[str, QAction | None] = {
-            'copy_cells': copy_cells_action,
-            'copy_rows': copy_rows_action,
-            'select_row': select_row_action,
-            'select_column': select_column_action,
-            'select_all': select_all_action,
-            'open_location': open_location_action,
-            'terminate_process': terminate_process_action,
-            'terminate_tree': terminate_tree_action,
-        }
         current_item = self._find_tree_item_by_pid(tree, pid)
-        row_index = (
-            tree.indexFromItem(current_item, 0)
-            if current_item is not None else None
+        self._dispatch_context_menu(
+            tree, position,
+            self._MenuContext(
+                pid=pid,
+                row_path=row_path,
+                has_children=(
+                    self._tree_item_has_children(tree_item, pid)
+                    if pid is not None else False
+                ),
+                row_index=(
+                    tree.indexFromItem(current_item, 0)
+                    if current_item is not None else None
+                ),
+                col_idx=col_idx,
+            ),
         )
-        if self._handle_selection_action(
-            chosen_action, actions, tree,
-            row_index=row_index, col_idx=col_idx,
-        ):
-            return
-        self._handle_managed_tree_menu_action(
-            chosen_action=chosen_action,
-            actions=actions,
-            pid=pid,
-            row_path=row_path,
-        )
-
-    def _handle_managed_tree_menu_action(
-        self,
-        *,
-        chosen_action: QAction | None,
-        actions: dict[str, QAction | None],
-        pid: int | None,
-        row_path: str | None,
-    ) -> None:
-        """Execute the selected managed-tree context menu action."""
-        if chosen_action is None:
-            return
-
-        if (
-            actions.get('open_location') is not None
-            and chosen_action == actions['open_location']
-            and row_path is not None
-        ):
-            subprocess.run(  # noqa: S603
-                ['explorer', '/select,', row_path],  # noqa: S607
-                check=False,
-            )
-            return
-        if (
-            actions['terminate_process'] is not None
-            and chosen_action == actions['terminate_process']
-            and pid is not None
-            and self._confirm_terminate(pid=pid, tree=False)
-        ):
-            self._terminate_single_process(pid)
-            return
-        if (
-            actions['terminate_tree'] is not None
-            and chosen_action == actions['terminate_tree']
-            and pid is not None
-            and self._confirm_terminate(pid=pid, tree=True)
-        ):
-            self._stop_single_process(pid)
 
     def _popup(self, title: str, text: str, icon: QMessageBox.Icon) -> None:
         """Show a styled in-app modal dialog for status and report messages."""
@@ -1299,6 +1249,17 @@ class MainWindow(QMainWindow):
             'Could not request administrator privileges from Windows.',
             QMessageBox.Icon.Warning,
         )
+
+    def _report_and_notify(
+        self,
+        status_text: str,
+        dialog_title: str,
+        icon: QMessageBox.Icon,
+        sections: list[tuple[str, list[dict[str, str]]]],
+    ) -> None:
+        """Update the status bar and show a process-report dialog."""
+        self.status_label.setText(status_text)
+        self._show_process_report(dialog_title, icon, sections)
 
     def _show_process_report(
         self,
@@ -1375,15 +1336,21 @@ class MainWindow(QMainWindow):
             for section_title, pids in section_pid_groups
         ]
 
+    def _ensure_process_path_exists(self) -> bool:
+        """Check process path exists, showing error popup if missing."""
+        if self.process_path.exists():
+            return True
+        self.status_label.setText('RadeonSoftware.exe path was not found.')
+        self._popup(
+            'Path not found',
+            f'Could not find executable at:\n{self.process_path}',
+            QMessageBox.Icon.Critical,
+        )
+        return False
+
     def restart_software(self) -> None:
         """Stop any running instance of Radeon Software, then launch a fresh one."""
-        if not self.process_path.exists():
-            self.status_label.setText('RadeonSoftware.exe path was not found.')
-            self._popup(
-                'Path not found',
-                f'Could not find executable at:\n{self.process_path}',
-                QMessageBox.Icon.Critical,
-            )
+        if not self._ensure_process_path_exists():
             return
 
         before_categories, before_info = self._collect_managed_report_data()
@@ -1393,10 +1360,9 @@ class MainWindow(QMainWindow):
         denied_pids: set[int] = set()
         if attempted_pids:
             process_pid = attempted_pids[0]
-            target_create_times = self._capture_target_create_times(set(attempted_pids))
             stopped_pids, denied_pids = terminate_process_tree(process_pid)
-            denied_pids = self._filter_denied_pids_still_running(
-                denied_pids, target_create_times,
+            denied_pids = self._verified_denied_pids(
+                denied_pids, set(attempted_pids),
             )
 
         launch_detached(self.process_path)
@@ -1423,12 +1389,10 @@ class MainWindow(QMainWindow):
         )
 
         if denied_known or not started_known:
-            self.status_label.setText(
+            self._report_and_notify(
                 f'Restart partial: closed {len(stopped_known)},'
                 f' started {len(started_known)},'
                 f' denied {len(denied_known)}.',
-            )
-            self._show_process_report(
                 'Restart partial',
                 QMessageBox.Icon.Warning,
                 report_sections,
@@ -1442,12 +1406,10 @@ class MainWindow(QMainWindow):
                 )
             return
 
-        self.status_label.setText(
+        self._report_and_notify(
             f'Restarted AMD Adrenalin:'
             f' closed {len(stopped_known)},'
             f' started {len(started_known)}.',
-        )
-        self._show_process_report(
             'Restart complete',
             QMessageBox.Icon.Information,
             report_sections,
@@ -1455,13 +1417,7 @@ class MainWindow(QMainWindow):
 
     def start_only(self) -> None:
         """Launch Radeon Software without stopping any existing instance first."""
-        if not self.process_path.exists():
-            self.status_label.setText('RadeonSoftware.exe path was not found.')
-            self._popup(
-                'Path not found',
-                f'Could not find executable at:\n{self.process_path}',
-                QMessageBox.Icon.Critical,
-            )
+        if not self._ensure_process_path_exists():
             return
 
         existing_pid = get_pid_by_path(self.process_path)
@@ -1470,8 +1426,8 @@ class MainWindow(QMainWindow):
                 self._collect_managed_report_data(existing_pid)
             )
 
-            self.status_label.setText('RadeonSoftware.exe is already running.')
-            self._show_process_report(
+            self._report_and_notify(
+                'RadeonSoftware.exe is already running.',
                 'Already running',
                 QMessageBox.Icon.Information,
                 self._build_report_sections_from_pid_groups(
@@ -1493,20 +1449,16 @@ class MainWindow(QMainWindow):
         )
 
         if not started_known:
-            self.status_label.setText(
+            self._report_and_notify(
                 'Launch requested, but no AMD Adrenalin process was detected yet.',
-            )
-            self._show_process_report(
                 'Start status',
                 QMessageBox.Icon.Warning,
                 report_sections,
             )
             return
 
-        self.status_label.setText(
+        self._report_and_notify(
             f'Started {len(started_known)} AMD Adrenalin process(es).',
-        )
-        self._show_process_report(
             'Started',
             QMessageBox.Icon.Information,
             report_sections,
@@ -1599,10 +1551,9 @@ class MainWindow(QMainWindow):
 
         target_categories, process_info = self._collect_managed_report_data(pid)
 
-        target_create_times = self._capture_target_create_times(set(target_categories))
         stopped_pids, denied_pids = terminate_process_tree(pid)
-        denied_pids = self._filter_denied_pids_still_running(
-            denied_pids, target_create_times,
+        denied_pids = self._verified_denied_pids(
+            denied_pids, set(target_categories),
         )
 
         attempted_pids = sorted(target_categories)
@@ -1625,12 +1576,10 @@ class MainWindow(QMainWindow):
         )
 
         if denied_known:
-            self.status_label.setText(
+            self._report_and_notify(
                 f'Stop partial:'
                 f' closed {len(stopped_known)},'
                 f' denied {len(denied_known)}.',
-            )
-            self._show_process_report(
                 'Stop partial',
                 QMessageBox.Icon.Warning,
                 report_sections,
@@ -1641,18 +1590,16 @@ class MainWindow(QMainWindow):
             return
 
         if stopped_pids:
-            self.status_label.setText(
+            self._report_and_notify(
                 f'Stopped {len(stopped_known)} AMD Adrenalin process(es).',
-            )
-            self._show_process_report(
                 'Stopped',
                 QMessageBox.Icon.Information,
                 report_sections,
             )
             return
 
-        self.status_label.setText('RadeonSoftware.exe is no longer running.')
-        self._show_process_report(
+        self._report_and_notify(
+            'RadeonSoftware.exe is no longer running.',
             'Already stopped',
             QMessageBox.Icon.Information,
             report_sections,
@@ -1734,10 +1681,9 @@ class MainWindow(QMainWindow):
             )
             return
 
-        target_create_times = self._capture_target_create_times(set(target_categories))
         stopped_pids_total, denied_pids_total = self._stop_targets(target_categories)
-        denied_pids_total = self._filter_denied_pids_still_running(
-            denied_pids_total, target_create_times,
+        denied_pids_total = self._verified_denied_pids(
+            denied_pids_total, set(target_categories),
         )
 
         for pid in stopped_pids_total | denied_pids_total:
@@ -1753,11 +1699,9 @@ class MainWindow(QMainWindow):
         stopped_count = len(stopped_pids_total)
         denied_count = len(denied_pids_total)
         if denied_count > 0:
-            self.status_label.setText(
+            self._report_and_notify(
                 f'Stopped {stopped_count} AMD process(es),'
                 f' {denied_count} denied by permissions.',
-            )
-            self._show_process_report(
                 'Stop All partial',
                 QMessageBox.Icon.Warning,
                 report_sections,
@@ -1770,8 +1714,8 @@ class MainWindow(QMainWindow):
             )
             return
 
-        self.status_label.setText(f'Stopped {stopped_count} monitored AMD process(es).')
-        self._show_process_report(
+        self._report_and_notify(
+            f'Stopped {stopped_count} monitored AMD process(es).',
             'Stop All complete',
             QMessageBox.Icon.Information,
             report_sections,

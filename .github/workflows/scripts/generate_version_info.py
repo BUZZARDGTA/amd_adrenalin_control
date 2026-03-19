@@ -1,4 +1,4 @@
-"""Generate a PyInstaller version-info file from pyproject.toml metadata."""
+"""Generate a PyInstaller version-info file from package metadata."""
 
 import argparse
 import re
@@ -44,19 +44,19 @@ VSVersionInfo(
 """
 
 VERSION_PATTERN = re.compile(
-    r'^version\s*=\s*"(?P<version>[0-9]+\.[0-9]+\.[0-9]+)"\s*$',
+    r"^__version__\s*=\s*['\"](?P<version>[0-9]+\.[0-9]+\.[0-9]+)['\"]\s*$",
     re.MULTILINE,
 )
 
 
-def read_version(pyproject_path: Path) -> Version:
-    """Read the project version string from pyproject.toml."""
-    content = pyproject_path.read_text(encoding='utf-8')
+def read_version(init_path: Path) -> Version:
+    """Read the version string from the package __init__.py."""
+    content = init_path.read_text(encoding='utf-8')
     match = VERSION_PATTERN.search(content)
     if not match:
         print(
-            f'ERROR: Could not find a valid version '
-            f'in {pyproject_path}',
+            f'ERROR: Could not find a valid __version__ '
+            f'in {init_path}',
             file=sys.stderr,
         )
         sys.exit(1)
@@ -81,7 +81,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             'Generate PyInstaller version-info'
-            ' from pyproject.toml'
+            ' from package __init__.py'
         ),
     )
     parser.add_argument(
@@ -92,8 +92,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    pyproject_path = REPO_ROOT / 'pyproject.toml'
-    version = read_version(pyproject_path)
+    init_path = (
+        REPO_ROOT / 'src' / 'amd_adrenalin_control' / '__init__.py'
+    )
+    version = read_version(init_path)
     generate(version, args.output)
 
 

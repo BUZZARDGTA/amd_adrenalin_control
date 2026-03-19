@@ -16,6 +16,31 @@ from PyQt6.QtWidgets import (
 
 from .ui_helpers import require_qheader_view
 
+_DIALOG_BASE_STYLESHEET = """\
+QDialog {{
+    background-color: #0c1320;
+    color: #d7e3f5;
+    border: 1px solid #1d2b43;
+    border-radius: 12px;
+}}
+QDialogButtonBox QPushButton {{
+    background-color: #1f6feb;
+    color: #ffffff;
+    border: none;
+    border-radius: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 8px 16px;
+    min-width: 90px;
+}}
+QDialogButtonBox QPushButton:hover {{
+    background-color: #3a82f7;
+}}
+QDialogButtonBox QPushButton:pressed {{
+    background-color: #1759bf;
+}}
+"""
+
 
 class NotificationDialog(QDialog):
     """Styled in-app dialog used instead of native message boxes."""
@@ -89,13 +114,8 @@ class NotificationDialog(QDialog):
         layout.addWidget(buttons)
 
         self.setStyleSheet(
-            f"""
-            QDialog {{
-                background-color: #0c1320;
-                color: #d7e3f5;
-                border: 1px solid #1d2b43;
-                border-radius: 12px;
-            }}
+            _DIALOG_BASE_STYLESHEET.format()
+            + f"""
             QLabel#dialog_heading {{
                 color: {accent};
                 font-size: 16px;
@@ -114,22 +134,6 @@ class NotificationDialog(QDialog):
                 font-family: Consolas, 'Courier New', monospace;
                 font-size: 12px;
                 padding: 8px;
-            }}
-            QDialogButtonBox QPushButton {{
-                background-color: #1f6feb;
-                color: #ffffff;
-                border: none;
-                border-radius: 8px;
-                font-size: 12px;
-                font-weight: 700;
-                padding: 8px 16px;
-                min-width: 90px;
-            }}
-            QDialogButtonBox QPushButton:hover {{
-                background-color: #3a82f7;
-            }}
-            QDialogButtonBox QPushButton:pressed {{
-                background-color: #1759bf;
             }}
             """,
         )
@@ -265,13 +269,8 @@ class ProcessReportDialog(QDialog):
         root.addWidget(buttons)
 
         self.setStyleSheet(
-            f"""
-            QDialog {{
-                background-color: #0c1320;
-                color: #d7e3f5;
-                border: 1px solid #1d2b43;
-                border-radius: 12px;
-            }}
+            _DIALOG_BASE_STYLESHEET.format()
+            + f"""
             QScrollArea#report_scroll,
             QWidget#report_viewport,
             QWidget#report_body {{
@@ -329,22 +328,6 @@ class ProcessReportDialog(QDialog):
                 border: 1px solid #1f2f49;
                 border-radius: 6px;
                 padding: 6px;
-            }}
-            QDialogButtonBox QPushButton {{
-                background-color: #1f6feb;
-                color: #ffffff;
-                border: none;
-                border-radius: 8px;
-                font-size: 12px;
-                font-weight: 700;
-                padding: 8px 16px;
-                min-width: 90px;
-            }}
-            QDialogButtonBox QPushButton:hover {{
-                background-color: #3a82f7;
-            }}
-            QDialogButtonBox QPushButton:pressed {{
-                background-color: #1759bf;
             }}
             """,
         )

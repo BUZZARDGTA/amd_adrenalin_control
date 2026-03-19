@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "amd-adrenalin-control"
-version = "0.1.4"
+dynamic = ["version"]
 description = "PyQt6 desktop utility for AMD Adrenalin Control to start, stop, restart, and monitor AMD Adrenalin processes on Windows."
 readme = "README.md"
 license = { text = "GPL-3.0-only" }
@@ -25,6 +25,9 @@ amd-adrenalin-control = "main:main"
 [tool.setuptools]
 package-dir = {"" = "src"}
 py-modules = ["main"]
+
+[tool.setuptools.dynamic]
+version = {attr = "amd_adrenalin_control.__version__"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
