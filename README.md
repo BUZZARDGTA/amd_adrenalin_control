@@ -4,7 +4,7 @@ PyQt6 desktop utility for Windows to control AMD Adrenalin and monitor related A
 
 ## Preview
 
-<img width="1132" height="917" alt="python_2026-03-17_07-17" src="https://github.com/user-attachments/assets/d59c280f-274f-41cb-a6e5-176f09249af8" />
+<img width="1132" height="857" alt="python_2026-03-19_07-55" src="https://github.com/user-attachments/assets/e883901a-21cd-4b5b-a8f4-1319f23dd3f7" />
 
 ## Features
 
