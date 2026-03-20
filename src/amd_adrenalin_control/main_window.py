@@ -110,8 +110,8 @@ class MainWindow(QMainWindow):
         self.process_path = RADEON_SOFTWARE_PATH
         self._process_path_str = str(self.process_path.absolute())
         self.setWindowTitle(f'AMD Adrenalin Control v{__version__}')
-        self.setMinimumSize(990, 705)
-        self.resize(1130, 825)
+        self.setMinimumSize(1012, 705)
+        self.resize(1152, 825)
 
         self.status_label = QLabel('', self)
         self.status_label.hide()
@@ -191,11 +191,10 @@ class MainWindow(QMainWindow):
         callback: Callable[[], None],
         *,
         obj_name: str | None = None,
-        height: int = 40,
     ) -> QPushButton:
         """Create a styled action button wired to a callback."""
         btn = QPushButton(text, self)
-        btn.setMinimumHeight(height)
+        btn.setMinimumHeight(40)
         btn.setToolTip(tooltip)
         if obj_name is not None:
             btn.setObjectName(obj_name)
@@ -232,8 +231,8 @@ class MainWindow(QMainWindow):
             ' including their child processes.',
             self.stop_all,
             obj_name='stop_all_btn',
-            height=38,
         )
+        stop_all_btn.setMinimumHeight(38)
 
         layout.addWidget(restart_btn, 0, 0)
         layout.addWidget(start_btn, 0, 1)
@@ -487,14 +486,6 @@ class MainWindow(QMainWindow):
         tree.clear()
 
         for row_idx, row in enumerate(rows):
-            name = str(row['name'])
-            path_text = str(row['path'])
-            pid_text = str(row['pid_text'])
-            cpu_text = str(row['cpu_text'])
-            mem_text = str(row['mem_text'])
-            status = str(row['status'])
-
-            values = (name, path_text, pid_text, cpu_text, mem_text, status)
             row_bg = (
                 _COLOR_ROW_EVEN
                 if row_idx % 2 == EVEN_ROW_REMAINDER
@@ -503,7 +494,7 @@ class MainWindow(QMainWindow):
 
             tree_item = QTreeWidgetItem(tree)
             self._configure_managed_tree_item_columns(
-                tree_item, values, _ALIGNS, row_bg, row, muted=muted,
+                tree_item, row_bg, row, muted=muted,
             )
 
         self._resize_tree_widget(tree)
@@ -615,11 +606,9 @@ class MainWindow(QMainWindow):
             idx = tree.indexFromItem(item, col)
             sel_model.select(idx, QItemSelectionModel.SelectionFlag.Select)
 
-    def _configure_managed_tree_item_columns(  # noqa: PLR0913
+    def _configure_managed_tree_item_columns(
         self,
         tree_item: QTreeWidgetItem,
-        values: tuple[str, ...],
-        aligns: tuple[Qt.AlignmentFlag, ...],
         row_bg: QColor,
         row: dict[str, object],
         *,
@@ -629,11 +618,18 @@ class MainWindow(QMainWindow):
         name = str(row.get('name', ''))
         path_text = str(row.get('path', ''))
         status = str(row.get('status', ''))
-        pid_value = row.get('pid_value')
-        indent_raw = row.get('indent', 0)
-        indent = indent_raw if isinstance(indent_raw, int) else 0
+        indent = row.get('indent', 0)
+        if not isinstance(indent, int):
+            indent = 0
+        values = (
+            name, path_text,
+            str(row.get('pid_text', '')),
+            str(row.get('cpu_text', '')),
+            str(row.get('mem_text', '')),
+            status,
+        )
 
-        for col, (val, align) in enumerate(zip(values, aligns, strict=True)):
+        for col, (val, align) in enumerate(zip(values, _ALIGNS, strict=True)):
             tree_item.setText(col, val)
             tree_item.setTextAlignment(col, align)
             tree_item.setBackground(col, row_bg)
@@ -641,8 +637,10 @@ class MainWindow(QMainWindow):
                 tree_item.setData(col, COPY_TEXT_ROLE, name)
                 if tooltip := PROCESS_TOOLTIPS.get(name.lower()):
                     tree_item.setToolTip(col, tooltip)
-                if isinstance(pid_value, int):
-                    tree_item.setData(col, Qt.ItemDataRole.UserRole, pid_value)
+                if isinstance(row.get('pid_value'), int):
+                    tree_item.setData(
+                        col, Qt.ItemDataRole.UserRole, row['pid_value'],
+                    )
             elif col == PATH_COLUMN_INDEX:
                 tree_item.setToolTip(col, path_text)
             if col == STATUS_COLUMN_INDEX:
@@ -668,16 +666,9 @@ class MainWindow(QMainWindow):
         current_parent: QTreeWidgetItem | None = None
 
         for row_idx, row in enumerate(rows):
-            name = str(row['name'])
-            path_text = str(row['path'])
-            pid_text = str(row['pid_text'])
-            cpu_text = str(row['cpu_text'])
-            mem_text = str(row['mem_text'])
-            status = str(row['status'])
             indent_raw = row['indent']
             indent = indent_raw if isinstance(indent_raw, int) else 0
 
-            values = (name, path_text, pid_text, cpu_text, mem_text, status)
             row_bg = (
                 _COLOR_ROW_EVEN
                 if row_idx % 2 == EVEN_ROW_REMAINDER
@@ -693,7 +684,7 @@ class MainWindow(QMainWindow):
                 tree_item = QTreeWidgetItem(tree)
 
             self._configure_managed_tree_item_columns(
-                tree_item, values, _ALIGNS, row_bg, row,
+                tree_item, row_bg, row,
             )
 
         self._restore_managed_tree_expansion()

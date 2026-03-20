@@ -138,7 +138,7 @@ def launch_detached(filepath: Path) -> None:
     creation_flags |= getattr(subprocess, 'DETACHED_PROCESS', 0)
     creation_flags |= getattr(subprocess, 'CREATE_BREAKAWAY_FROM_JOB', 0)
 
-    subprocess.Popen(  # noqa: S603
+    subprocess.Popen(  # noqa: S603  # pylint: disable=consider-using-with
         [str(executable)],
         close_fds=True,
         creationflags=creation_flags,
