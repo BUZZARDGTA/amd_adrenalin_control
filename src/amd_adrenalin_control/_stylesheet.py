@@ -95,6 +95,11 @@ QLabel#section_header {
     font-weight: 700;
     letter-spacing: 0.6px;
 }
+QLabel#section_count {
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 600;
+}
 QLabel#section_description {
     color: #8ea7c7;
     font-size: 11px;

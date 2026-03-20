@@ -92,20 +92,34 @@ def _find_pid_by_path(
     return None
 
 
+def _walk_process_tree(
+    proc: psutil.Process,
+    depth: int,
+) -> list[tuple[psutil.Process, int]]:
+    """Recursively walk a process tree returning (process, depth) pairs."""
+    result: list[tuple[psutil.Process, int]] = [(proc, depth)]
+    try:
+        children = proc.children(recursive=False)
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return result
+    for child in children:
+        result.extend(_walk_process_tree(child, depth + 1))
+    return result
+
+
 def build_managed_rows(
     pid: int | None,
 ) -> tuple[list[tuple[psutil.Process, int]], set[int]]:
-    """Build rows for the main managed process and its children."""
+    """Build rows for the main managed process and its descendants."""
     if pid is None:
         return [], set()
 
     try:
         parent = psutil.Process(pid)
-        children = parent.children(recursive=True)
     except psutil.NoSuchProcess:
         return [], set()
 
-    main_rows = [(parent, 0)] + [(child, 1) for child in children]
+    main_rows = _walk_process_tree(parent, 0)
     managed_pids = {proc.pid for proc, _ in main_rows}
     return main_rows, managed_pids
 

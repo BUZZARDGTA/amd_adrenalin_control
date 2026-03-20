@@ -5,6 +5,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import NamedTuple
 
 import psutil
@@ -101,6 +102,45 @@ _EMPTY_ALIGNS = (
 )
 
 
+class _SectionPair(NamedTuple):
+    """A process-monitor section widget paired with its tree widget."""
+
+    section: QWidget
+    tree: QTreeWidget
+
+
+class _Sections(NamedTuple):
+    """All three process-monitor section pairs."""
+
+    managed: _SectionPair
+    companion: _SectionPair
+    service: _SectionPair
+
+
+class _StatusWidgets(NamedTuple):
+    """Status indicator widgets shown in the monitor header."""
+
+    label: QLabel
+    badge: QLabel
+
+
+@dataclass(slots=True)
+class _ManagedTreeUiState:
+    """Mutable UI state for the managed process tree."""
+
+    expanded: dict[int, bool] = field(default_factory=dict)
+    selected_cells: dict[int, set[int]] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class _RefreshState:
+    """Mutable state for the background refresh mechanism."""
+
+    bridge: RefreshBridge
+    in_flight: bool = False
+    pending: bool = False
+
+
 class MainWindow(QMainWindow):
     """Main application window for controlling and monitoring AMD Adrenalin."""
 
@@ -108,47 +148,45 @@ class MainWindow(QMainWindow):
         """Initialise the main window, build the UI, and start the refresh timer."""
         super().__init__()
         self.process_path = RADEON_SOFTWARE_PATH
-        self._process_path_str = str(self.process_path.absolute())
         self.setWindowTitle(f'AMD Adrenalin Control v{__version__}')
         self.setMinimumSize(1012, 705)
         self.resize(1152, 825)
 
-        self.status_label = QLabel('', self)
-        self.status_label.hide()
-        self.status_badge = QLabel('● NOT RUNNING', self)
-        self.status_badge.setObjectName('badge_stopped')
-        self.managed_section, self.managed_tree = self._create_managed_section(
+        _label = QLabel('', self)
+        _label.hide()
+        _badge = QLabel('● NOT RUNNING', self)
+        _badge.setObjectName('badge_stopped')
+        self._status = _StatusWidgets(label=_label, badge=_badge)
+
+        managed_pair = self._create_managed_section(
             self,
             'Radeon Software Managed',
             'Main RadeonSoftware.exe process and any child processes spawned from it.',
         )
-        self._managed_tree_expanded: dict[int, bool] = {}
-        self._managed_tree_selected_cells: dict[int, set[int]] = {}
-        self.companion_section, self.companion_tree = self._create_process_section(
+        companion_pair = self._create_process_section(
             self,
             'AMD Companion Processes',
             'Supporting user-space AMD helper executables'
             ' that assist telemetry and features.',
         )
-        self.service_section, self.service_tree = self._create_process_section(
+        service_pair = self._create_process_section(
             self,
             'AMD System Services',
             'Background service executables that provide'
             ' driver and system-level AMD functionality.',
         )
-        self._process_tables: list[QTreeWidget] = [
-            self.managed_tree,
-            self.companion_tree,
-            self.service_tree,
-        ]
+        self._sections = _Sections(
+            managed=_SectionPair(*managed_pair),
+            companion=_SectionPair(*companion_pair),
+            service=_SectionPair(*service_pair),
+        )
+        self._managed_tree_ui_state = _ManagedTreeUiState()
 
-        self._refresh_bridge = RefreshBridge(self)
-        _ready = self._refresh_bridge.snapshot_ready
-        _ready.connect(  # pyright: ignore[reportUnknownMemberType]
+        bridge = RefreshBridge(self)
+        bridge.snapshot_ready.connect(  # pyright: ignore[reportUnknownMemberType]
             self._apply_refresh_snapshot,
         )
-        self._refresh_in_flight = False
-        self._refresh_pending = False
+        self._refresh = _RefreshState(bridge)
 
         self._build_ui()
 
@@ -166,6 +204,65 @@ class MainWindow(QMainWindow):
     ) -> None:
         """Handle window close and let daemon refresh worker exit naturally."""
         super().closeEvent(a0)
+
+    # ------------------------------------------------------------------
+    # Properties that delegate to grouped containers so the rest of the
+    # code can keep using the original attribute names unchanged.
+    # ------------------------------------------------------------------
+
+    @property
+    def status_label(self) -> QLabel:
+        """Hidden label used for status text storage."""
+        return self._status.label
+
+    @property
+    def status_badge(self) -> QLabel:
+        """Visible running/stopped badge in the monitor header."""
+        return self._status.badge
+
+    @property
+    def managed_section(self) -> QWidget:
+        """Section widget for the managed process group."""
+        return self._sections.managed.section
+
+    @property
+    def managed_tree(self) -> QTreeWidget:
+        """Tree widget for the managed process group."""
+        return self._sections.managed.tree
+
+    @property
+    def companion_section(self) -> QWidget:
+        """Section widget for companion processes."""
+        return self._sections.companion.section
+
+    @property
+    def companion_tree(self) -> QTreeWidget:
+        """Tree widget for companion processes."""
+        return self._sections.companion.tree
+
+    @property
+    def service_section(self) -> QWidget:
+        """Section widget for AMD system services."""
+        return self._sections.service.section
+
+    @property
+    def service_tree(self) -> QTreeWidget:
+        """Tree widget for AMD system services."""
+        return self._sections.service.tree
+
+    @property
+    def _process_tables(self) -> list[QTreeWidget]:
+        """All three process tree widgets for cross-table operations."""
+        return [
+            self._sections.managed.tree,
+            self._sections.companion.tree,
+            self._sections.service.tree,
+        ]
+
+    @property
+    def _process_path_str(self) -> str:
+        """Absolute path string for the target executable."""
+        return str(self.process_path.absolute())
 
     def _build_ui(self) -> None:
         """Construct and lay out all widgets in the main window."""
@@ -364,6 +461,10 @@ class MainWindow(QMainWindow):
         label.setObjectName('section_header')
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        count_label = QLabel('(0)', section)
+        count_label.setObjectName('section_count')
+        count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         description_label = QLabel(description, section)
         description_label.setObjectName('section_description')
         description_label.setWordWrap(True)
@@ -386,7 +487,16 @@ class MainWindow(QMainWindow):
         tree.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
-        section_layout.addWidget(label)
+        header_row = QWidget(section)
+        header_row_layout = QHBoxLayout(header_row)
+        header_row_layout.setContentsMargins(0, 0, 0, 0)
+        header_row_layout.setSpacing(6)
+        header_row_layout.addStretch()
+        header_row_layout.addWidget(label)
+        header_row_layout.addWidget(count_label)
+        header_row_layout.addStretch()
+
+        section_layout.addWidget(header_row)
         section_layout.addWidget(description_label)
         section_layout.addWidget(tree)
         return section, tree
@@ -410,6 +520,10 @@ class MainWindow(QMainWindow):
         label.setObjectName('section_header')
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        count_label = QLabel('(0)', section)
+        count_label.setObjectName('section_count')
+        count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         description_label = QLabel(description, section)
         description_label.setObjectName('section_description')
         description_label.setWordWrap(True)
@@ -432,7 +546,16 @@ class MainWindow(QMainWindow):
         tree.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
-        section_layout.addWidget(label)
+        header_row = QWidget(section)
+        header_row_layout = QHBoxLayout(header_row)
+        header_row_layout.setContentsMargins(0, 0, 0, 0)
+        header_row_layout.setSpacing(6)
+        header_row_layout.addStretch()
+        header_row_layout.addWidget(label)
+        header_row_layout.addWidget(count_label)
+        header_row_layout.addStretch()
+
+        section_layout.addWidget(header_row)
         section_layout.addWidget(description_label)
         section_layout.addWidget(tree)
         return section, tree
@@ -451,6 +574,18 @@ class MainWindow(QMainWindow):
             lambda _idx: self._resize_managed_tree(),
         )
 
+    @staticmethod
+    def _count_visible_descendants(item: QTreeWidgetItem) -> int:
+        """Recursively count visible descendants of an expanded tree item."""
+        count = 0
+        if item.isExpanded():
+            for i in range(item.childCount()):
+                child = item.child(i)
+                if child is not None and not child.isHidden():
+                    count += 1
+                    count += MainWindow._count_visible_descendants(child)
+        return count
+
     def _resize_tree_widget(self, tree: QTreeWidget) -> None:
         """Fit a tree widget to its visible items so sections stay compact."""
         header = tree.header()
@@ -463,8 +598,7 @@ class MainWindow(QMainWindow):
             item = tree.topLevelItem(i)
             if item is not None and not item.isHidden():
                 visible_count += 1
-                if item.isExpanded():
-                    visible_count += item.childCount()
+                visible_count += self._count_visible_descendants(item)
 
         tree.setFixedHeight(
             header_height + (visible_count * row_height) + frame_height,
@@ -500,6 +634,13 @@ class MainWindow(QMainWindow):
         self._resize_tree_widget(tree)
         tree.setUpdatesEnabled(True)
 
+    @staticmethod
+    def _update_section_count(section: QWidget, count: int) -> None:
+        """Update the process count label inside a section widget."""
+        count_label = section.findChild(QLabel, 'section_count')
+        if count_label is not None:
+            count_label.setText(f'({count})')
+
     def _update_process_section(
         self,
         section: QWidget,
@@ -510,6 +651,7 @@ class MainWindow(QMainWindow):
     ) -> None:
         """Keep section visible and show either process rows or an empty-state row."""
         section.setVisible(True)
+        self._update_section_count(section, len(processes))
         if not processes:
             tree.clear()
             empty_item = QTreeWidgetItem(tree)
@@ -524,36 +666,50 @@ class MainWindow(QMainWindow):
             return
         self._populate_process_tree(tree, processes, muted=muted)
 
+    def _save_item_expansion_recursive(self, item: QTreeWidgetItem) -> None:
+        """Recursively persist expansion state for an item and its children."""
+        pid = item.data(NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole)
+        if isinstance(pid, int):
+            self._managed_tree_ui_state.expanded[pid] = item.isExpanded()
+        for i in range(item.childCount()):
+            child = item.child(i)
+            if child is not None:
+                self._save_item_expansion_recursive(child)
+
     def _save_managed_tree_expansion(self) -> None:
-        """Persist which top-level tree items are currently expanded."""
+        """Persist which tree items are currently expanded."""
         tree = self.managed_tree
         for i in range(tree.topLevelItemCount()):
             top_item = tree.topLevelItem(i)
-            if top_item is None:
-                continue
-            pid = top_item.data(NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole)
-            if isinstance(pid, int):
-                self._managed_tree_expanded[pid] = top_item.isExpanded()
+            if top_item is not None:
+                self._save_item_expansion_recursive(top_item)
+
+    def _restore_item_expansion_recursive(self, item: QTreeWidgetItem) -> None:
+        """Recursively re-apply saved expansion state for an item and children."""
+        pid = item.data(NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole)
+        expanded = (
+            self._managed_tree_ui_state.expanded.get(pid, True)
+            if isinstance(pid, int)
+            else True
+        )
+        item.setExpanded(expanded)
+        for i in range(item.childCount()):
+            child = item.child(i)
+            if child is not None:
+                self._restore_item_expansion_recursive(child)
 
     def _restore_managed_tree_expansion(self) -> None:
-        """Re-apply saved expansion state to top-level tree items."""
+        """Re-apply saved expansion state to all tree items."""
         tree = self.managed_tree
         for i in range(tree.topLevelItemCount()):
             top_item = tree.topLevelItem(i)
-            if top_item is None:
-                continue
-            pid = top_item.data(NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole)
-            expanded = (
-                self._managed_tree_expanded.get(pid, True)
-                if isinstance(pid, int)
-                else True
-            )
-            top_item.setExpanded(expanded)
+            if top_item is not None:
+                self._restore_item_expansion_recursive(top_item)
 
     def _save_managed_tree_selection(self) -> None:
         """Persist which tree cells are selected, keyed by PID -> columns."""
         tree = self.managed_tree
-        self._managed_tree_selected_cells = {}
+        self._managed_tree_ui_state.selected_cells = {}
         sel_model = tree.selectionModel()
         if sel_model is None:
             return
@@ -563,13 +719,26 @@ class MainWindow(QMainWindow):
                 continue
             pid = item.data(NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole)
             if isinstance(pid, int):
-                self._managed_tree_selected_cells.setdefault(pid, set()).add(
-                    index.column(),
-                )
+                self._managed_tree_ui_state.selected_cells.setdefault(
+                    pid, set(),
+                ).add(index.column())
+
+    def _restore_selection_recursive(
+        self,
+        tree: QTreeWidget,
+        sel_model: QItemSelectionModel,
+        item: QTreeWidgetItem,
+    ) -> None:
+        """Recursively restore cell selection for an item and its children."""
+        self._restore_item_cell_selection(tree, sel_model, item)
+        for i in range(item.childCount()):
+            child = item.child(i)
+            if child is not None:
+                self._restore_selection_recursive(tree, sel_model, child)
 
     def _restore_managed_tree_selection(self) -> None:
         """Re-apply saved per-cell selection to tree items matching saved PIDs."""
-        if not self._managed_tree_selected_cells:
+        if not self._managed_tree_ui_state.selected_cells:
             return
         tree = self.managed_tree
         sel_model = tree.selectionModel()
@@ -577,17 +746,8 @@ class MainWindow(QMainWindow):
             return
         for i in range(tree.topLevelItemCount()):
             top_item = tree.topLevelItem(i)
-            if top_item is None:
-                continue
-            self._restore_item_cell_selection(
-                tree, sel_model, top_item,
-            )
-            for j in range(top_item.childCount()):
-                child = top_item.child(j)
-                if child is not None:
-                    self._restore_item_cell_selection(
-                        tree, sel_model, child,
-                    )
+            if top_item is not None:
+                self._restore_selection_recursive(tree, sel_model, top_item)
 
     def _restore_item_cell_selection(
         self,
@@ -599,7 +759,7 @@ class MainWindow(QMainWindow):
         pid = item.data(NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole)
         if not isinstance(pid, int):
             return
-        cols = self._managed_tree_selected_cells.get(pid)
+        cols = self._managed_tree_ui_state.selected_cells.get(pid)
         if cols is None:
             return
         for col in cols:
@@ -663,7 +823,9 @@ class MainWindow(QMainWindow):
         tree.setUpdatesEnabled(False)
         tree.clear()
 
-        current_parent: QTreeWidgetItem | None = None
+        # Stack tracks the tree item at each depth so children
+        # attach under the correct parent at any nesting level.
+        parent_stack: list[QTreeWidgetItem] = []
 
         for row_idx, row in enumerate(rows):
             indent_raw = row['indent']
@@ -675,13 +837,15 @@ class MainWindow(QMainWindow):
                 else _COLOR_ROW_ODD
             )
 
-            if indent == 0:
-                tree_item = QTreeWidgetItem(tree)
-                current_parent = tree_item
-            elif current_parent is not None:
-                tree_item = QTreeWidgetItem(current_parent)
+            # Trim the stack back to the current indent depth.
+            del parent_stack[indent:]
+
+            if parent_stack:
+                tree_item = QTreeWidgetItem(parent_stack[-1])
             else:
                 tree_item = QTreeWidgetItem(tree)
+
+            parent_stack.append(tree_item)
 
             self._configure_managed_tree_item_columns(
                 tree_item, row_bg, row,
@@ -698,6 +862,7 @@ class MainWindow(QMainWindow):
     ) -> None:
         """Update the managed tree section with process data or an empty state."""
         self.managed_section.setVisible(True)
+        self._update_section_count(self.managed_section, len(processes))
         if not processes:
             tree = self.managed_tree
             tree.clear()
@@ -896,8 +1061,8 @@ class MainWindow(QMainWindow):
         )
         return answer == QMessageBox.StandardButton.Yes
 
+    @staticmethod
     def _handle_selection_action(
-        self,
         chosen_action: QAction,
         actions: dict[str, QAction | None],
         view: QTreeWidget,
@@ -1389,11 +1554,11 @@ class MainWindow(QMainWindow):
 
     def _schedule_refresh(self) -> None:
         """Schedule a process snapshot refresh without blocking the UI thread."""
-        if self._refresh_in_flight:
-            self._refresh_pending = True
+        if self._refresh.in_flight:
+            self._refresh.pending = True
             return
 
-        self._refresh_in_flight = True
+        self._refresh.in_flight = True
         worker = threading.Thread(
             target=self._run_refresh_worker,
             args=(self._process_path_str,),
@@ -1407,14 +1572,14 @@ class MainWindow(QMainWindow):
         try:
             snapshot = collect_refresh_snapshot(process_path)
         except (RuntimeError, ValueError, TypeError, psutil.Error, OSError) as exc:
-            self._refresh_bridge.snapshot_ready.emit({'error': str(exc)})
+            self._refresh.bridge.snapshot_ready.emit({'error': str(exc)})
             return
 
-        self._refresh_bridge.snapshot_ready.emit(snapshot)
+        self._refresh.bridge.snapshot_ready.emit(snapshot)
 
     def _apply_refresh_snapshot(self, snapshot: object) -> None:
         """Apply worker-produced refresh data on the GUI thread."""
-        self._refresh_in_flight = False
+        self._refresh.in_flight = False
 
         if isinstance(snapshot, dict) and 'error' not in snapshot:
             is_running = bool(snapshot.get('is_running', False))
@@ -1441,8 +1606,8 @@ class MainWindow(QMainWindow):
                     muted=True,
                 )
 
-        if self._refresh_pending:
-            self._refresh_pending = False
+        if self._refresh.pending:
+            self._refresh.pending = False
             self._schedule_refresh()
 
     def _refresh_process_info(self) -> None:

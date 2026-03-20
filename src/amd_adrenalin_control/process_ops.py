@@ -52,9 +52,25 @@ def _kill_process(
 
 def _collect_alive_after_wait(
     children: list[psutil.Process],
+    denied_pids: set[int],
 ) -> list[psutil.Process]:
     """Wait briefly for children to exit and return those still alive."""
-    _, alive = psutil.wait_procs(children, timeout=3)
+    try:
+        _, alive = psutil.wait_procs(children, timeout=3)
+    except psutil.AccessDenied:
+        # On Windows, wait_procs can raise AccessDenied for protected
+        # child processes.  Fall back to checking each child individually.
+        alive = []
+        for child in children:
+            try:
+                child.wait(timeout=0)
+            except psutil.TimeoutExpired:
+                alive.append(child)
+            except psutil.AccessDenied:
+                denied_pids.add(child.pid)
+                alive.append(child)
+            except psutil.NoSuchProcess:
+                pass
     return list(alive)
 
 
@@ -113,7 +129,7 @@ def terminate_process_tree(pid: int) -> tuple[set[int], set[int]]:
     for child in children:
         _terminate_process(child, stopped_pids, denied_pids)
 
-    alive_children = _collect_alive_after_wait(children)
+    alive_children = _collect_alive_after_wait(children, denied_pids)
     for child in alive_children:
         _kill_process(child, stopped_pids, denied_pids)
 
