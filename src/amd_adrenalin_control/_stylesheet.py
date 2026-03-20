@@ -56,31 +56,6 @@ QPushButton#stop_all_btn:hover {
 QPushButton#stop_all_btn:pressed {
     background-color: #7a1616;
 }
-QTableWidget#process_table {
-    background-color: #0d1220;
-    color: #c9d8f0;
-    border: 1px solid #1e2d45;
-    border-radius: 6px;
-    gridline-color: #1a2540;
-    font-size: 12px;
-    outline: 0;
-}
-QTableWidget#process_table::item {
-    padding: 6px 10px;
-    border: none;
-}
-QTableWidget#process_table::item:hover {
-    background-color: #233a5d;
-    color: #f4f8ff;
-}
-QTableWidget#process_table::item:selected {
-    background-color: #1c2e4a;
-    color: #e9eef8;
-}
-QTableWidget#process_table::item:selected:hover {
-    background-color: #294874;
-    color: #f4f8ff;
-}
 QHeaderView::section {
     background-color: #141c2e;
     color: #6a9fd8;
@@ -89,18 +64,7 @@ QHeaderView::section {
     padding: 6px 10px;
     border: none;
     border-bottom: 1px solid #1e2d45;
-}
-QHeaderView::section:vertical {
-    width: 0px;
-    padding: 0px;
-    margin: 0px;
-    border: none;
-    background: transparent;
-    color: transparent;
-}
-QTableCornerButton::section {
-    border: none;
-    background: transparent;
+    border-right: 1px solid #1a2540;
 }
 QMenu {
     background-color: #0d1220;
@@ -157,7 +121,7 @@ QScrollArea#monitor_scroll {
     border: none;
     background-color: #0f141d;
 }
-QTreeWidget#managed_tree {
+QTreeWidget#process_tree {
     background-color: #0d1220;
     color: #c9d8f0;
     border: 1px solid #1e2d45;
@@ -165,19 +129,20 @@ QTreeWidget#managed_tree {
     font-size: 12px;
     outline: 0;
 }
-QTreeWidget#managed_tree::item {
+QTreeWidget#process_tree::item {
     padding: 6px 10px;
     border: none;
+    border-right: 1px solid #1a2540;
 }
-QTreeWidget#managed_tree::item:hover {
+QTreeWidget#process_tree::item:hover {
     background-color: #233a5d;
     color: #f4f8ff;
 }
-QTreeWidget#managed_tree::item:selected {
+QTreeWidget#process_tree::item:selected {
     background-color: #1c2e4a;
     color: #e9eef8;
 }
-QTreeWidget#managed_tree::item:selected:hover {
+QTreeWidget#process_tree::item:selected:hover {
     background-color: #294874;
     color: #f4f8ff;
 }
