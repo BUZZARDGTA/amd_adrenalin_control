@@ -1,4 +1,5 @@
 """Process management operations for AMD Adrenalin control."""
+import os
 import subprocess
 from pathlib import Path
 
@@ -7,9 +8,9 @@ import psutil
 
 def get_pid_by_path(filepath: Path) -> int | None:
     """Return the PID of the process matching filepath, or None."""
-    target = str(filepath.absolute())
+    target = os.path.normcase(str(filepath.absolute()))
     for process in psutil.process_iter(['pid', 'exe']):
-        if process.info['exe'] == target:
+        if os.path.normcase(process.info['exe'] or '') == target:
             return process.pid
     return None
 

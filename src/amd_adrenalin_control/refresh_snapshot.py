@@ -1,5 +1,7 @@
 """Background snapshot helpers for live process monitor refreshes."""
 
+import os
+
 import psutil
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -85,9 +87,10 @@ def _find_pid_by_path(
     target: str,
 ) -> int | None:
     """Return the PID matching target exe path from an already-collected dict."""
+    norm_target = os.path.normcase(target)
     for proc in all_procs.values():
         exe = proc.info.get('exe')
-        if exe == target:
+        if exe and os.path.normcase(exe) == norm_target:
             return proc.pid
     return None
 
