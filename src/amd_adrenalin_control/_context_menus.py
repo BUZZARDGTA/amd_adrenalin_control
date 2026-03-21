@@ -1,7 +1,5 @@
 """Context menu building, dispatch, and action routing for process trees."""
 
-from __future__ import annotations
-
 import contextlib
 import subprocess
 from typing import TYPE_CHECKING, NamedTuple

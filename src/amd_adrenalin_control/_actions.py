@@ -1,7 +1,5 @@
 """Process control actions, service management, refresh, and bulk operations."""
 
-from __future__ import annotations
-
 import contextlib
 import threading
 import time

@@ -1,7 +1,5 @@
 """Tree widget display, population, and UI state persistence helpers."""
 
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, NamedTuple
 
