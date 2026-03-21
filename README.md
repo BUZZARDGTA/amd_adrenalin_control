@@ -12,6 +12,7 @@ PyQt6 desktop utility for Windows to control AMD Adrenalin and monitor related A
 - Restart AMD Adrenalin
 - Stop AMD Adrenalin process tree
 - Stop all monitored AMD processes (managed, companion, service)
+- Start and stop AMD services
 - Live process monitor split into categorized tables
 - Detailed, structured action reports for stop operations
 
@@ -56,7 +57,7 @@ amd-adrenalin-control
 - `src/amd_adrenalin_control/_report_helpers.py`: Process reporting helpers for stop operations
 - `src/amd_adrenalin_control/_stylesheet.py`: Application stylesheet
 - `src/amd_adrenalin_control/constants.py`: App constants and process name sets
-- `src/amd_adrenalin_control/ui_helpers.py`: UI runtime type helpers
+- `src/amd_adrenalin_control/ui_helpers.py`: UI selection, copy, and runtime type helpers
 - `requirements.txt`: Runtime dependencies
 - `pyproject.toml`: Project metadata and tooling config
 

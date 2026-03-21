@@ -1,9 +1,13 @@
 """Process management operations for AMD Adrenalin control."""
 import os
 import subprocess
+import time
 from pathlib import Path
-
 import psutil
+import pywintypes
+import win32service
+import win32serviceutil
+import winerror
 
 
 def get_pid_by_path(filepath: Path) -> int | None:
@@ -61,7 +65,7 @@ def _collect_alive_after_wait(
     except psutil.AccessDenied:
         # On Windows, wait_procs can raise AccessDenied for protected
         # child processes.  Fall back to checking each child individually.
-        alive = []
+        alive: list[psutil.Process] = []
         for child in children:
             try:
                 child.wait(timeout=0)
@@ -160,3 +164,122 @@ def launch_detached(filepath: Path) -> None:
         close_fds=True,
         creationflags=creation_flags,
     )
+
+
+def _wait_for_service_status(
+    service_name: str,
+    target_status: int,
+    timeout: float = 10.0,
+) -> bool:
+    """Poll until the service reaches target_status or timeout expires."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            raw_status: object = win32serviceutil.QueryServiceStatus(service_name)[1]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # pylint: disable=line-too-long
+        except pywintypes.error:
+            return False
+        if not isinstance(raw_status, int):
+            return False
+        if raw_status == target_status:
+            return True
+        time.sleep(0.3)
+    return False
+
+
+def query_service_status(service_name: str) -> int | None:
+    """Return the current win32service status constant, or None on error."""
+    try:
+        raw_status: object = win32serviceutil.QueryServiceStatus(service_name)[1]  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # pylint: disable=line-too-long
+    except pywintypes.error:
+        return None
+    return raw_status if isinstance(raw_status, int) else None
+
+
+def query_service_pid(service_name: str) -> int | None:
+    """Return the PID of a running Windows service, or None on error/stopped."""
+    try:
+        hscm = win32service.OpenSCManager(
+            None, None, win32service.SC_MANAGER_CONNECT,
+        )
+        try:
+            hs = win32service.OpenService(  # pyright: ignore[reportUnknownMemberType]
+                hscm, service_name, win32service.SERVICE_QUERY_STATUS,
+            )
+            try:
+                info: object = win32service.QueryServiceStatusEx(hs)  # pyright: ignore[reportUnknownVariableType]  # pylint: disable=line-too-long
+                if not isinstance(info, dict):
+                    return None
+                pid: object = info.get('ProcessId', 0)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # pylint: disable=line-too-long
+                if not isinstance(pid, int):
+                    return None
+                return pid if pid else None
+            finally:
+                win32service.CloseServiceHandle(hs)
+        finally:
+            win32service.CloseServiceHandle(hscm)
+    except pywintypes.error:
+        return None
+
+
+def query_service_binary_path(service_name: str) -> str | None:
+    """Return the binary path of a Windows service, or None on error."""
+    try:
+        hscm = win32service.OpenSCManager(
+            None, None, win32service.SC_MANAGER_CONNECT,
+        )
+        try:
+            hs = win32service.OpenService(  # pyright: ignore[reportUnknownMemberType]
+                hscm, service_name, win32service.SERVICE_QUERY_CONFIG,
+            )
+            try:
+                config: object = win32service.QueryServiceConfig(hs)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # pylint: disable=line-too-long
+                if not isinstance(config, tuple) or len(config) < 4:  # pyright: ignore[reportUnknownArgumentType]  # pylint: disable=line-too-long
+                    return None
+                path: object = config[3]  # lpBinaryPathName  # pyright: ignore[reportUnknownVariableType]  # pylint: disable=line-too-long
+                return path if isinstance(path, str) else None
+            finally:
+                win32service.CloseServiceHandle(hs)
+        finally:
+            win32service.CloseServiceHandle(hscm)
+    except pywintypes.error:
+        return None
+
+
+def start_windows_service(
+    service_name: str,
+) -> tuple[bool, str]:
+    """Start a Windows service via Win32 API; return (success, detail)."""
+    try:
+        win32serviceutil.StartService(service_name)  # pyright: ignore[reportUnknownMemberType]
+    except pywintypes.error as exc:
+        if exc.winerror == winerror.ERROR_SERVICE_ALREADY_RUNNING:
+            return True, 'already running'
+        if exc.winerror == winerror.ERROR_ACCESS_DENIED:
+            return False, 'access denied'
+        return False, exc.strerror
+    reached = _wait_for_service_status(
+        service_name, win32service.SERVICE_RUNNING,
+    )
+    if reached:
+        return True, 'started'
+    return True, 'start pending'
+
+
+def stop_windows_service(
+    service_name: str,
+) -> tuple[bool, str]:
+    """Stop a Windows service via Win32 API; return (success, detail)."""
+    try:
+        win32serviceutil.StopService(service_name)  # pyright: ignore[reportUnknownMemberType]
+    except pywintypes.error as exc:
+        if exc.winerror == winerror.ERROR_SERVICE_NOT_ACTIVE:
+            return True, 'already stopped'
+        if exc.winerror == winerror.ERROR_ACCESS_DENIED:
+            return False, 'access denied'
+        return False, exc.strerror
+    reached = _wait_for_service_status(
+        service_name, win32service.SERVICE_STOPPED,
+    )
+    if reached:
+        return True, 'stopped'
+    return True, 'stop pending'

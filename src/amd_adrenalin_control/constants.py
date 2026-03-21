@@ -9,17 +9,28 @@ RADEON_SOFTWARE_PATH = (
 
 COMPANION_NAMES: frozenset[str] = frozenset({
     'amdadlxserv.exe',
+    'amdow.exe',
+    'amdrsserv.exe',
+    'amdrssrcext.exe',
+    'atieclxx.exe',
     'cpumetricsserver.exe',
     'amd3dvcacheuser.exe',
 })
 
 SERVICE_NAMES: frozenset[str] = frozenset({
     'atiesrxx.exe',
-    'atieclxx.exe',
     'amdfendrsr.exe',
     'amd3dvcachesvc.exe',
     'amdppkgsvc.exe',
 })
+
+# Maps service executable names to their Windows service names.
+SERVICE_REGISTRY: dict[str, str] = {
+    'atiesrxx.exe': 'AMD External Events Utility',
+    'amdfendrsr.exe': 'AMD Crash Defender Service',
+    'amd3dvcachesvc.exe': 'amd3dvcacheSvc',
+    'amdppkgsvc.exe': 'AmdPpkgSvc',
+}
 
 PROCESS_TOOLTIPS: dict[str, str] = {
     # pylint: disable=line-too-long
@@ -83,6 +94,7 @@ PROCESS_TOOLTIPS: dict[str, str] = {
     'stress.exe': 'AMD utility - CPU stress test bundled with Ryzen Master.',
     'vc_redist.x64.exe': 'Microsoft runtime - Visual C++ redistributable required by Ryzen Master.',  # noqa: E501
     # --- Windows system processes spawned by AMD executables ---
+    'cmd.exe': 'Windows system - Command Processor spawned as an AMD process launcher.',
     'conhost.exe': 'Windows system - Console Window Host spawned by an AMD console process.',  # noqa: E501
     'powershell.exe': 'Windows system - PowerShell instance spawned by an AMD process.',
     # pylint: enable=line-too-long

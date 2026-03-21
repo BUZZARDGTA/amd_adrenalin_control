@@ -167,12 +167,6 @@ class ProcessReportDialog(QDialog):
         self.setMinimumSize(860, 620)
         self.resize(980, 720)
 
-        populated_sections = [
-            (section_title, entries)
-            for section_title, entries in sections
-            if entries
-        ]
-
         heading_text, accent = NotificationDialog.icon_theme(icon)
 
         root = QVBoxLayout(self)
@@ -192,71 +186,15 @@ class ProcessReportDialog(QDialog):
         if viewport := scroll.viewport():
             viewport.setObjectName('report_viewport')
 
-        body = QWidget(scroll)
-        body.setObjectName('report_body')
-        body_layout = QVBoxLayout(body)
-        body_layout.setContentsMargins(0, 0, 0, 0)
-        body_layout.setSpacing(12)
+        self._body = QWidget(scroll)
+        self._body.setObjectName('report_body')
+        self._body_layout = QVBoxLayout(self._body)
+        self._body_layout.setContentsMargins(0, 0, 0, 0)
+        self._body_layout.setSpacing(12)
 
-        if not populated_sections:
-            empty = QLabel('No processes to report.', body)
-            empty.setObjectName('report_empty')
-            body_layout.addWidget(empty)
-        else:
-            for section_title, entries in populated_sections:
-                section = QFrame(body)
-                section.setObjectName('report_section')
-                section_layout = QVBoxLayout(section)
-                section_layout.setContentsMargins(12, 12, 12, 12)
-                section_layout.setSpacing(8)
+        self.populate_sections(sections)
 
-                section_header = QLabel(f'{section_title} ({len(entries)})', section)
-                section_header.setObjectName('report_section_title')
-                section_layout.addWidget(section_header)
-
-                for entry in entries:
-                    card = QFrame(section)
-                    card.setObjectName('report_card')
-                    card_layout = QVBoxLayout(card)
-                    card_layout.setContentsMargins(10, 10, 10, 10)
-                    card_layout.setSpacing(4)
-
-                    name = entry.get('name', '<unknown>')
-                    pid = entry.get('pid', '?')
-                    category = entry.get('category', 'Unknown')
-                    parent_text = entry.get('parent', '<unknown>')
-                    path_text = entry.get('path', '<unavailable>')
-
-                    title_label = QLabel(f'{name} (PID {pid})', card)
-                    title_label.setObjectName('report_card_title')
-
-                    meta_label = QLabel(
-                        f'Category: {category}\n'
-                        f'Parent: {parent_text}',
-                        card,
-                    )
-                    meta_label.setObjectName('report_card_meta')
-
-                    path_label = QLabel('Path:', card)
-                    path_label.setObjectName('report_card_path_label')
-
-                    path_value = QLabel(path_text, card)
-                    path_value.setObjectName('report_card_path')
-                    path_value.setWordWrap(True)
-                    path_value.setTextInteractionFlags(
-                        Qt.TextInteractionFlag.TextSelectableByMouse,
-                    )
-
-                    card_layout.addWidget(title_label)
-                    card_layout.addWidget(meta_label)
-                    card_layout.addWidget(path_label)
-                    card_layout.addWidget(path_value)
-                    section_layout.addWidget(card)
-
-                body_layout.addWidget(section)
-
-        body_layout.addStretch()
-        scroll.setWidget(body)
+        scroll.setWidget(self._body)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok, self)
         buttons.accepted.connect(  # pyright: ignore[reportUnknownMemberType]
@@ -331,3 +269,83 @@ class ProcessReportDialog(QDialog):
             }}
             """,
         )
+
+    def populate_sections(
+        self,
+        sections: list[tuple[str, list[dict[str, str]]]],
+    ) -> None:
+        """Build section and process cards into the report body."""
+        populated = [
+            (section_title, entries)
+            for section_title, entries in sections
+            if entries
+        ]
+
+        if not populated:
+            empty = QLabel('No processes to report.', self._body)
+            empty.setObjectName('report_empty')
+            self._body_layout.addWidget(empty)
+        else:
+            for section_title, entries in populated:
+                section = QFrame(self._body)
+                section.setObjectName('report_section')
+                section_layout = QVBoxLayout(section)
+                section_layout.setContentsMargins(12, 12, 12, 12)
+                section_layout.setSpacing(8)
+
+                section_header = QLabel(
+                    f'{section_title} ({len(entries)})', section,
+                )
+                section_header.setObjectName('report_section_title')
+                section_layout.addWidget(section_header)
+
+                for entry in entries:
+                    self._build_entry_card(section, section_layout, entry)
+
+                self._body_layout.addWidget(section)
+
+        self._body_layout.addStretch()
+
+    @staticmethod
+    def _build_entry_card(
+        parent: QFrame,
+        layout: QVBoxLayout,
+        entry: dict[str, str],
+    ) -> None:
+        """Build a single process entry card and add it to *layout*."""
+        card = QFrame(parent)
+        card.setObjectName('report_card')
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(10, 10, 10, 10)
+        card_layout.setSpacing(4)
+
+        name = entry.get('name', '<unknown>')
+        pid = entry.get('pid', '?')
+        category = entry.get('category', 'Unknown')
+        parent_text = entry.get('parent', '')
+        path_text = entry.get('path', '<unavailable>')
+
+        title_label = QLabel(f'{name} (PID {pid})', card)
+        title_label.setObjectName('report_card_title')
+
+        meta_lines = f'Category: {category}'
+        if parent_text and parent_text != '-':
+            meta_lines += f'\nParent: {parent_text}'
+        meta_label = QLabel(meta_lines, card)
+        meta_label.setObjectName('report_card_meta')
+
+        path_label = QLabel('Path:', card)
+        path_label.setObjectName('report_card_path_label')
+
+        path_value = QLabel(path_text, card)
+        path_value.setObjectName('report_card_path')
+        path_value.setWordWrap(True)
+        path_value.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse,
+        )
+
+        card_layout.addWidget(title_label)
+        card_layout.addWidget(meta_label)
+        card_layout.addWidget(path_label)
+        card_layout.addWidget(path_value)
+        layout.addWidget(card)

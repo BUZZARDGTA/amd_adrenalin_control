@@ -1,6 +1,7 @@
 """Background snapshot helpers for live process monitor refreshes."""
 
 import os
+from typing import TypedDict
 
 import psutil
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -8,10 +9,45 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from .constants import COMPANION_NAMES, SERVICE_NAMES
 
 
+class RowSnapshot(TypedDict):
+    """Plain-data snapshot of a single process row."""
+
+    name: str
+    path: str
+    pid_text: str
+    cpu_text: str
+    mem_text: str
+    status: str
+    pid_value: int | None
+    indent: int
+
+
+class RefreshSnapshot(TypedDict):
+    """Full refresh payload emitted from the worker thread."""
+
+    is_running: bool
+    managed_rows: list[RowSnapshot]
+    companion_rows: list[RowSnapshot]
+    service_rows: list[RowSnapshot]
+
+
+class ErrorPayload(TypedDict):
+    """Error payload emitted when the refresh worker fails."""
+
+    error: str
+
+
+SnapshotPayload = RefreshSnapshot | ErrorPayload
+
+
 class RefreshBridge(QObject):
     """Thread-safe signal bridge for refresh snapshots coming from worker threads."""
 
     snapshot_ready = pyqtSignal(object)
+
+    def emit_snapshot(self, payload: SnapshotPayload) -> None:
+        """Emit *snapshot_ready* with *payload* (thread-safe via Qt signal)."""
+        self.snapshot_ready.emit(payload)
 
 
 def _safe_process_name_lower(proc: psutil.Process) -> str | None:
@@ -26,8 +62,12 @@ def _safe_process_name_lower(proc: psutil.Process) -> str | None:
         return None
 
 
-def build_row_snapshot(proc: psutil.Process, indent: int) -> dict[str, object]:
-    """Build a plain-data row snapshot for a process."""
+def build_row_snapshot(proc: psutil.Process, indent: int) -> RowSnapshot | None:
+    """Build a plain-data row snapshot for a process.
+
+    Returns `None` when the process is gone,
+    signalling that the row should be omitted from the table entirely.
+    """
     try:
         with proc.oneshot():
             name = proc.name()
@@ -43,10 +83,7 @@ def build_row_snapshot(proc: psutil.Process, indent: int) -> dict[str, object]:
                 path_text = 'Executable path unavailable'
             pid_value: int | None = proc.pid
     except psutil.NoSuchProcess:
-        name, path_text, pid_text, cpu_text, mem_text, status = (
-            '<ended>', '<unavailable>', '-', '-', '-', 'gone',
-        )
-        pid_value = None
+        return None
     except psutil.AccessDenied:
         name, path_text, pid_text, cpu_text, mem_text, status = (
             '<restricted>',
@@ -127,12 +164,50 @@ def build_managed_rows(
     return main_rows, managed_pids
 
 
-def split_companion_and_service_rows(
+_LAUNCHER_WRAPPERS: frozenset[str] = frozenset({
+    'cmd.exe',
+    'powershell.exe',
+    'conhost.exe',
+})
+
+
+def _find_companion_root(
+    proc: psutil.Process,
+    managed_pids: set[int],
+) -> psutil.Process:
+    """Walk up through companion names and launcher wrappers."""
+    current = proc
+    while True:
+        try:
+            parent = current.parent()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            break
+        if (
+            parent is None
+            or parent.pid in (0, 4)
+            or parent.pid in managed_pids
+        ):
+            break
+        try:
+            parent_name = parent.name().lower()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            break
+        if (
+            parent_name in COMPANION_NAMES
+            or parent_name in _LAUNCHER_WRAPPERS
+        ):
+            current = parent
+            continue
+        break
+    return current
+
+
+def _classify_companion_service(
     all_procs: dict[int, psutil.Process],
     managed_pids: set[int],
-) -> tuple[list[psutil.Process], list[psutil.Process]]:
-    """Return companion and service process lists excluding managed rows."""
-    companion_rows: list[tuple[psutil.Process, str]] = []
+) -> tuple[dict[int, psutil.Process], list[tuple[psutil.Process, str]]]:
+    """Classify non-managed procs into companion roots and service rows."""
+    companion_roots: dict[int, psutil.Process] = {}
     service_rows: list[tuple[psutil.Process, str]] = []
 
     for proc in all_procs.values():
@@ -144,19 +219,46 @@ def split_companion_and_service_rows(
             continue
 
         if name_lower in COMPANION_NAMES:
-            companion_rows.append((proc, name_lower))
+            root = _find_companion_root(proc, managed_pids)
+            if root.pid not in companion_roots:
+                companion_roots[root.pid] = root
         elif name_lower in SERVICE_NAMES:
             service_rows.append((proc, name_lower))
 
-    companion_rows.sort(key=lambda pair: pair[1])
+    return companion_roots, service_rows
+
+
+def split_companion_and_service_rows(
+    all_procs: dict[int, psutil.Process],
+    managed_pids: set[int],
+) -> tuple[
+    list[tuple[psutil.Process, int]],
+    list[psutil.Process],
+]:
+    """Return companion (with tree depth) and service process lists."""
+    companion_roots, service_rows = _classify_companion_service(
+        all_procs, managed_pids,
+    )
+
+    # Tree-walk each companion root to get (process, depth) rows.
+    companion_tree_rows: list[tuple[psutil.Process, int]] = []
+    seen_pids: set[int] = set()
+    for root in sorted(companion_roots.values(), key=lambda p: p.pid):
+        if root.pid in seen_pids:
+            continue
+        for proc, depth in _walk_process_tree(root, 0):
+            if proc.pid not in seen_pids:
+                seen_pids.add(proc.pid)
+                companion_tree_rows.append((proc, depth))
+
     service_rows.sort(key=lambda pair: pair[1])
     return (
-        [proc for proc, _ in companion_rows],
+        companion_tree_rows,
         [proc for proc, _ in service_rows],
     )
 
 
-def collect_refresh_snapshot(process_path: str) -> dict[str, object]:
+def collect_refresh_snapshot(process_path: str) -> RefreshSnapshot:
     """Collect all data needed to refresh monitor tables in a worker thread."""
     all_procs = collect_running_processes()
     pid = _find_pid_by_path(all_procs, process_path)
@@ -170,15 +272,18 @@ def collect_refresh_snapshot(process_path: str) -> dict[str, object]:
     return {
         'is_running': bool(main_rows),
         'managed_rows': [
-            build_row_snapshot(proc, indent)
+            row
             for proc, indent in main_rows
+            if (row := build_row_snapshot(proc, indent)) is not None
         ],
         'companion_rows': [
-            build_row_snapshot(proc, 0)
-            for proc in companion_rows
+            row
+            for proc, indent in companion_rows
+            if (row := build_row_snapshot(proc, indent)) is not None
         ],
         'service_rows': [
-            build_row_snapshot(proc, 0)
+            row
             for proc in service_rows
+            if (row := build_row_snapshot(proc, 0)) is not None
         ],
     }

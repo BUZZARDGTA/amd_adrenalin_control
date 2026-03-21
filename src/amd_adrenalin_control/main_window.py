@@ -52,11 +52,25 @@ from .constants import (
     PROCESS_TOOLTIPS,
     RADEON_SOFTWARE_PATH,
     SERVICE_NAMES,
+    SERVICE_REGISTRY,
     STATUS_COLORS,
 )
 from .dialogs import NotificationDialog, ProcessReportDialog
-from .process_ops import get_pid_by_path, launch_detached, terminate_process_tree
-from .refresh_snapshot import RefreshBridge, collect_refresh_snapshot
+from .process_ops import (
+    get_pid_by_path,
+    launch_detached,
+    query_service_binary_path,
+    query_service_pid,
+    start_windows_service,
+    stop_windows_service,
+    terminate_process_tree,
+)
+from .refresh_snapshot import (
+    RefreshBridge,
+    RowSnapshot,
+    SnapshotPayload,
+    collect_refresh_snapshot,
+)
 from .uac import is_debug_session, is_running_as_admin, request_self_elevation
 from .ui_helpers import (
     COPY_TEXT_ROLE,
@@ -128,8 +142,16 @@ class _StatusWidgets(NamedTuple):
 class _ManagedTreeUiState:
     """Mutable UI state for the managed process tree."""
 
-    expanded: dict[int, bool] = field(default_factory=dict)
-    selected_cells: dict[int, set[int]] = field(default_factory=dict)
+    expanded: dict[int, bool] = field(default_factory=dict[int, bool])
+    selected_cells: dict[int, set[int]] = field(default_factory=dict[int, set[int]])
+
+
+class _TreeUiStates(NamedTuple):
+    """Per-section tree UI states."""
+
+    managed: _ManagedTreeUiState
+    companion: _ManagedTreeUiState
+    service: _ManagedTreeUiState
 
 
 @dataclass(slots=True)
@@ -139,6 +161,7 @@ class _RefreshState:
     bridge: RefreshBridge
     in_flight: bool = False
     pending: bool = False
+    closing: bool = False
 
 
 class MainWindow(QMainWindow):
@@ -149,8 +172,8 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.process_path = RADEON_SOFTWARE_PATH
         self.setWindowTitle(f'AMD Adrenalin Control v{__version__}')
-        self.setMinimumSize(1012, 705)
-        self.resize(1152, 825)
+        self.setMinimumSize(1040, 900)
+        self.resize(1180, 1020)
 
         _label = QLabel('', self)
         _label.hide()
@@ -180,7 +203,22 @@ class MainWindow(QMainWindow):
             companion=_SectionPair(*companion_pair),
             service=_SectionPair(*service_pair),
         )
-        self._managed_tree_ui_state = _ManagedTreeUiState()
+
+        # Replace the generic process context menu on the service tree
+        # with a service-specific one (stop service instead of terminate).
+        svc_tree = self._sections.service.tree
+        _ctx = svc_tree.customContextMenuRequested
+        _ctx.disconnect()  # pyright: ignore[reportUnknownMemberType]
+
+        def _on_svc_ctx_menu(pos: QPoint) -> None:
+            self._show_service_tree_context_menu(svc_tree, pos)
+
+        _ctx.connect(_on_svc_ctx_menu)  # pyright: ignore[reportUnknownMemberType]
+        self._tree_ui = _TreeUiStates(
+            managed=_ManagedTreeUiState(),
+            companion=_ManagedTreeUiState(),
+            service=_ManagedTreeUiState(),
+        )
 
         bridge = RefreshBridge(self)
         bridge.snapshot_ready.connect(  # pyright: ignore[reportUnknownMemberType]
@@ -202,7 +240,9 @@ class MainWindow(QMainWindow):
         self,
         a0: QCloseEvent | None,
     ) -> None:
-        """Handle window close and let daemon refresh worker exit naturally."""
+        """Stop the refresh timer and prevent worker emits on close."""
+        self._timer.stop()
+        self._refresh.closing = True
         super().closeEvent(a0)
 
     # ------------------------------------------------------------------
@@ -331,10 +371,19 @@ class MainWindow(QMainWindow):
         )
         stop_all_btn.setMinimumHeight(38)
 
+        start_services_btn = self._create_action_button(
+            'Start AMD Services',
+            'Starts all AMD system services'
+            ' (External Events, Crash Defender, etc.).',
+            self.start_services,
+            obj_name='start_services_btn',
+        )
+
         layout.addWidget(restart_btn, 0, 0)
         layout.addWidget(start_btn, 0, 1)
         layout.addWidget(stop_btn, 0, 2)
         layout.addWidget(stop_all_btn, 1, 0, 1, 3)
+        layout.addWidget(start_services_btn, 2, 0, 1, 3)
 
     def _build_monitor_header(self, layout: QGridLayout) -> None:
         """Build the live monitor heading and status badge row."""
@@ -349,7 +398,7 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(monitor_label)
         header_layout.addWidget(self.status_badge)
         header_layout.addStretch()
-        layout.addWidget(monitor_header, 2, 0, 1, 3)
+        layout.addWidget(monitor_header, 3, 0, 1, 3)
 
     def _build_monitor_sections(self, layout: QGridLayout) -> None:
         """Build the process monitor scroll area and section tables."""
@@ -372,7 +421,7 @@ class MainWindow(QMainWindow):
         monitor_layout.addStretch()
 
         monitor_scroll.setWidget(monitor_content)
-        layout.addWidget(monitor_scroll, 3, 0, 1, 3)
+        layout.addWidget(monitor_scroll, 4, 0, 1, 3)
 
     def _apply_stylesheet(self) -> None:
         """Apply the main window stylesheet."""
@@ -401,10 +450,12 @@ class MainWindow(QMainWindow):
         copy_action = QAction(view)
         copy_action.setShortcut(QKeySequence.StandardKey.Copy)
         copy_action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        copy_action.triggered.connect(  # pyright: ignore[reportUnknownMemberType]
-            lambda _, current_view=view: copy_selected_cells(current_view),
-        )
-        view.addAction(copy_action)
+
+        def _on_copy(_checked: bool = False, v: QTreeWidget = view) -> None:
+            copy_selected_cells(v)
+
+        copy_action.triggered.connect(_on_copy)  # pyright: ignore[reportUnknownMemberType]
+        view.addAction(copy_action)  # pyright: ignore[reportUnknownMemberType]
         view.itemSelectionChanged.connect(  # pyright: ignore[reportUnknownMemberType]
             lambda current_view=view:
                 self._enforce_single_table_selection(current_view),
@@ -414,18 +465,19 @@ class MainWindow(QMainWindow):
         """Enable selection, copy, and context menu on a process tree."""
         self._configure_common_view_interactions(tree)
         _ctx_signal = tree.customContextMenuRequested
-        _ctx_signal.connect(  # pyright: ignore[reportUnknownMemberType]
-            lambda pos, current_tree=tree:
-                self._show_tree_context_menu(
-                    current_tree, pos,
-                ),
-        )
-        tree.expanded.connect(  # pyright: ignore[reportUnknownMemberType]
-            lambda _idx, t=tree: self._resize_tree_widget(t),
-        )
-        tree.collapsed.connect(  # pyright: ignore[reportUnknownMemberType]
-            lambda _idx, t=tree: self._resize_tree_widget(t),
-        )
+
+        def _on_ctx_menu(pos: QPoint, t: QTreeWidget = tree) -> None:
+            self._show_tree_context_menu(t, pos)
+
+        def _on_expand(_idx: QModelIndex, t: QTreeWidget = tree) -> None:
+            self._resize_tree_widget(t)
+
+        def _on_collapse(_idx: QModelIndex, t: QTreeWidget = tree) -> None:
+            self._resize_tree_widget(t)
+
+        _ctx_signal.connect(_on_ctx_menu)  # pyright: ignore[reportUnknownMemberType]
+        tree.expanded.connect(_on_expand)  # pyright: ignore[reportUnknownMemberType]
+        tree.collapsed.connect(_on_collapse)  # pyright: ignore[reportUnknownMemberType]
 
     def _enforce_single_table_selection(
         self,
@@ -567,12 +619,15 @@ class MainWindow(QMainWindow):
         _ctx_signal.connect(  # pyright: ignore[reportUnknownMemberType]
             self._show_managed_tree_context_menu,
         )
-        tree.expanded.connect(  # pyright: ignore[reportUnknownMemberType]
-            lambda _idx: self._resize_managed_tree(),
-        )
-        tree.collapsed.connect(  # pyright: ignore[reportUnknownMemberType]
-            lambda _idx: self._resize_managed_tree(),
-        )
+
+        def _on_managed_expand(_idx: QModelIndex) -> None:
+            self._resize_managed_tree()
+
+        def _on_managed_collapse(_idx: QModelIndex) -> None:
+            self._resize_managed_tree()
+
+        tree.expanded.connect(_on_managed_expand)  # pyright: ignore[reportUnknownMemberType]
+        tree.collapsed.connect(_on_managed_collapse)  # pyright: ignore[reportUnknownMemberType]
 
     @staticmethod
     def _count_visible_descendants(item: QTreeWidgetItem) -> int:
@@ -611,9 +666,7 @@ class MainWindow(QMainWindow):
     def _populate_process_tree(
         self,
         tree: QTreeWidget,
-        rows: list[dict[str, object]],
-        *,
-        muted: bool = False,
+        rows: list[RowSnapshot],
     ) -> None:
         """Populate a process tree widget from plain row snapshots."""
         tree.setUpdatesEnabled(False)
@@ -628,7 +681,7 @@ class MainWindow(QMainWindow):
 
             tree_item = QTreeWidgetItem(tree)
             self._configure_managed_tree_item_columns(
-                tree_item, row_bg, row, muted=muted,
+                tree_item, row_bg, row,
             )
 
         self._resize_tree_widget(tree)
@@ -637,40 +690,250 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _update_section_count(section: QWidget, count: int) -> None:
         """Update the process count label inside a section widget."""
-        count_label = section.findChild(QLabel, 'section_count')
-        if count_label is not None:
-            count_label.setText(f'({count})')
+        result = section.findChild(QWidget, 'section_count')
+        if isinstance(result, QLabel):
+            result.setText(f'({count})')
+
+    @staticmethod
+    def _populate_empty_row(tree: QTreeWidget) -> None:
+        """Insert a non-selectable placeholder row into an empty tree."""
+        tree.clear()
+        empty_item = QTreeWidgetItem(tree)
+        empty_item.setFlags(
+            empty_item.flags()
+            & ~Qt.ItemFlag.ItemIsSelectable
+            & ~Qt.ItemFlag.ItemIsEnabled,
+        )
+        for col, (val, align) in enumerate(
+            zip(_EMPTY_VALUES, _EMPTY_ALIGNS, strict=True),
+        ):
+            empty_item.setText(col, val)
+            empty_item.setTextAlignment(col, align)
+            empty_item.setBackground(col, _COLOR_ROW_ODD)
+            empty_item.setForeground(col, _COLOR_EMPTY)
 
     def _update_process_section(
         self,
         section: QWidget,
         tree: QTreeWidget,
-        processes: list[dict[str, object]],
-        *,
-        muted: bool = False,
+        processes: list[RowSnapshot],
     ) -> None:
         """Keep section visible and show either process rows or an empty-state row."""
         section.setVisible(True)
         self._update_section_count(section, len(processes))
         if not processes:
-            tree.clear()
-            empty_item = QTreeWidgetItem(tree)
-            for col, (val, align) in enumerate(
-                zip(_EMPTY_VALUES, _EMPTY_ALIGNS, strict=True),
-            ):
-                empty_item.setText(col, val)
-                empty_item.setTextAlignment(col, align)
-                empty_item.setBackground(col, _COLOR_ROW_ODD)
-                empty_item.setForeground(col, _COLOR_EMPTY)
+            self._populate_empty_row(tree)
             self._resize_tree_widget(tree)
             return
-        self._populate_process_tree(tree, processes, muted=muted)
+        is_service = tree is self.service_tree
+        if is_service:
+            self._save_flat_tree_selection(
+                tree, self._tree_ui.service,
+            )
+            tree.setUpdatesEnabled(False)
+            tree.clear()
+            for row_idx, row in enumerate(processes):
+                row_bg = (
+                    _COLOR_ROW_EVEN
+                    if row_idx % 2 == EVEN_ROW_REMAINDER
+                    else _COLOR_ROW_ODD
+                )
+                tree_item = QTreeWidgetItem(tree)
+                self._configure_managed_tree_item_columns(
+                    tree_item, row_bg, row,
+                )
+            self._restore_flat_tree_selection(
+                tree, self._tree_ui.service,
+            )
+            self._resize_tree_widget(tree)
+            tree.setUpdatesEnabled(True)
+        else:
+            self._populate_process_tree(tree, processes)
+
+    def _update_companion_section(
+        self,
+        processes: list[RowSnapshot],
+    ) -> None:
+        """Update companion section with tree hierarchy like the managed section."""
+        section = self.companion_section
+        tree = self.companion_tree
+        section.setVisible(True)
+        self._update_section_count(section, len(processes))
+        if not processes:
+            self._populate_empty_row(tree)
+            self._resize_tree_widget(tree)
+            return
+
+        self._save_companion_tree_ui(tree)
+
+        tree.setUpdatesEnabled(False)
+        tree.clear()
+        parent_stack: list[QTreeWidgetItem] = []
+
+        for row_idx, row in enumerate(processes):
+            indent = row['indent']
+
+            row_bg = (
+                _COLOR_ROW_EVEN
+                if row_idx % 2 == EVEN_ROW_REMAINDER
+                else _COLOR_ROW_ODD
+            )
+
+            del parent_stack[indent:]
+
+            if parent_stack:
+                tree_item = QTreeWidgetItem(parent_stack[-1])
+            else:
+                tree_item = QTreeWidgetItem(tree)
+
+            parent_stack.append(tree_item)
+
+            self._configure_managed_tree_item_columns(
+                tree_item, row_bg, row,
+            )
+
+        self._restore_companion_tree_ui(tree)
+        self._resize_tree_widget(tree)
+        tree.setUpdatesEnabled(True)
+
+    @staticmethod
+    def _save_flat_tree_selection(
+        tree: QTreeWidget,
+        state: _ManagedTreeUiState,
+    ) -> None:
+        """Save selected cells for a flat (non-hierarchical) tree."""
+        state.selected_cells.clear()
+        sel_model = tree.selectionModel()
+        if sel_model is None:
+            return
+        for i in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(i)
+            if item is None:
+                continue
+            pid = item.data(
+                NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole,
+            )
+            if not isinstance(pid, int):
+                continue
+            for col in range(tree.columnCount()):
+                idx = tree.indexFromItem(item, col)
+                if sel_model.isSelected(idx):
+                    state.selected_cells.setdefault(pid, set()).add(col)
+
+    @staticmethod
+    def _restore_flat_tree_selection(
+        tree: QTreeWidget,
+        state: _ManagedTreeUiState,
+    ) -> None:
+        """Restore selected cells for a flat (non-hierarchical) tree."""
+        if not state.selected_cells:
+            return
+        sel_model = tree.selectionModel()
+        if sel_model is None:
+            return
+        for i in range(tree.topLevelItemCount()):
+            item = tree.topLevelItem(i)
+            if item is None:
+                continue
+            pid = item.data(
+                NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole,
+            )
+            if not isinstance(pid, int):
+                continue
+            cols = state.selected_cells.get(pid)
+            if cols is None:
+                continue
+            for col in cols:
+                idx = tree.indexFromItem(item, col)
+                sel_model.select(
+                    idx,
+                    QItemSelectionModel.SelectionFlag.Select,
+                )
+
+    def _save_companion_tree_ui(self, tree: QTreeWidget) -> None:
+        """Persist expansion and selection state for the companion tree."""
+        state = self._tree_ui.companion
+        state.expanded.clear()
+        state.selected_cells.clear()
+        for i in range(tree.topLevelItemCount()):
+            top = tree.topLevelItem(i)
+            if top is not None:
+                self._save_tree_ui_recursive(state, tree, top)
+
+    def _restore_companion_tree_ui(self, tree: QTreeWidget) -> None:
+        """Restore expansion and selection state for the companion tree."""
+        state = self._tree_ui.companion
+        sel_model = tree.selectionModel()
+        for i in range(tree.topLevelItemCount()):
+            top = tree.topLevelItem(i)
+            if top is not None:
+                self._restore_tree_ui_recursive(
+                    state, tree, sel_model, top,
+                )
+
+    def _save_tree_ui_recursive(
+        self,
+        state: _ManagedTreeUiState,
+        tree: QTreeWidget,
+        item: QTreeWidgetItem,
+    ) -> None:
+        """Recursively save expansion and selection into a state object."""
+        pid = item.data(
+            NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole,
+        )
+        if isinstance(pid, int):
+            state.expanded[pid] = item.isExpanded()
+            sel_model = tree.selectionModel()
+            if sel_model is not None:
+                for col in range(tree.columnCount()):
+                    idx = tree.indexFromItem(item, col)
+                    if sel_model.isSelected(idx):
+                        state.selected_cells.setdefault(
+                            pid, set(),
+                        ).add(col)
+        for i in range(item.childCount()):
+            child = item.child(i)
+            if child is not None:
+                self._save_tree_ui_recursive(state, tree, child)
+
+    def _restore_tree_ui_recursive(
+        self,
+        state: _ManagedTreeUiState,
+        tree: QTreeWidget,
+        sel_model: QItemSelectionModel | None,
+        item: QTreeWidgetItem,
+    ) -> None:
+        """Recursively restore expansion and selection from a state object."""
+        pid = item.data(
+            NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole,
+        )
+        expanded = (
+            state.expanded.get(pid, True)
+            if isinstance(pid, int)
+            else True
+        )
+        item.setExpanded(expanded)
+        if sel_model is not None and isinstance(pid, int):
+            cols = state.selected_cells.get(pid)
+            if cols is not None:
+                for col in cols:
+                    idx = tree.indexFromItem(item, col)
+                    sel_model.select(
+                        idx,
+                        QItemSelectionModel.SelectionFlag.Select,
+                    )
+        for i in range(item.childCount()):
+            child = item.child(i)
+            if child is not None:
+                self._restore_tree_ui_recursive(
+                    state, tree, sel_model, child,
+                )
 
     def _save_item_expansion_recursive(self, item: QTreeWidgetItem) -> None:
         """Recursively persist expansion state for an item and its children."""
         pid = item.data(NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole)
         if isinstance(pid, int):
-            self._managed_tree_ui_state.expanded[pid] = item.isExpanded()
+            self._tree_ui.managed.expanded[pid] = item.isExpanded()
         for i in range(item.childCount()):
             child = item.child(i)
             if child is not None:
@@ -688,7 +951,7 @@ class MainWindow(QMainWindow):
         """Recursively re-apply saved expansion state for an item and children."""
         pid = item.data(NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole)
         expanded = (
-            self._managed_tree_ui_state.expanded.get(pid, True)
+            self._tree_ui.managed.expanded.get(pid, True)
             if isinstance(pid, int)
             else True
         )
@@ -709,7 +972,7 @@ class MainWindow(QMainWindow):
     def _save_managed_tree_selection(self) -> None:
         """Persist which tree cells are selected, keyed by PID -> columns."""
         tree = self.managed_tree
-        self._managed_tree_ui_state.selected_cells = {}
+        self._tree_ui.managed.selected_cells = {}
         sel_model = tree.selectionModel()
         if sel_model is None:
             return
@@ -719,7 +982,7 @@ class MainWindow(QMainWindow):
                 continue
             pid = item.data(NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole)
             if isinstance(pid, int):
-                self._managed_tree_ui_state.selected_cells.setdefault(
+                self._tree_ui.managed.selected_cells.setdefault(
                     pid, set(),
                 ).add(index.column())
 
@@ -738,7 +1001,7 @@ class MainWindow(QMainWindow):
 
     def _restore_managed_tree_selection(self) -> None:
         """Re-apply saved per-cell selection to tree items matching saved PIDs."""
-        if not self._managed_tree_ui_state.selected_cells:
+        if not self._tree_ui.managed.selected_cells:
             return
         tree = self.managed_tree
         sel_model = tree.selectionModel()
@@ -759,7 +1022,7 @@ class MainWindow(QMainWindow):
         pid = item.data(NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole)
         if not isinstance(pid, int):
             return
-        cols = self._managed_tree_ui_state.selected_cells.get(pid)
+        cols = self._tree_ui.managed.selected_cells.get(pid)
         if cols is None:
             return
         for col in cols:
@@ -770,22 +1033,17 @@ class MainWindow(QMainWindow):
         self,
         tree_item: QTreeWidgetItem,
         row_bg: QColor,
-        row: dict[str, object],
-        *,
-        muted: bool = False,
+        row: RowSnapshot,
     ) -> None:
         """Set text, alignment, colors, tooltips, and data roles on a tree item."""
-        name = str(row.get('name', ''))
-        path_text = str(row.get('path', ''))
-        status = str(row.get('status', ''))
-        indent = row.get('indent', 0)
-        if not isinstance(indent, int):
-            indent = 0
+        name = row['name']
+        path_text = row['path']
+        status = row['status']
         values = (
             name, path_text,
-            str(row.get('pid_text', '')),
-            str(row.get('cpu_text', '')),
-            str(row.get('mem_text', '')),
+            row['pid_text'],
+            row['cpu_text'],
+            row['mem_text'],
             status,
         )
 
@@ -808,12 +1066,10 @@ class MainWindow(QMainWindow):
                     col,
                     _STATUS_QCOLORS.get(status, _COLOR_MUTED),
                 )
-            elif muted or indent > 0:
-                tree_item.setForeground(col, _COLOR_MUTED)
 
     def _populate_managed_tree(
         self,
-        rows: list[dict[str, object]],
+        rows: list[RowSnapshot],
     ) -> None:
         """Populate the managed tree widget from plain row snapshots."""
         tree = self.managed_tree
@@ -828,8 +1084,7 @@ class MainWindow(QMainWindow):
         parent_stack: list[QTreeWidgetItem] = []
 
         for row_idx, row in enumerate(rows):
-            indent_raw = row['indent']
-            indent = indent_raw if isinstance(indent_raw, int) else 0
+            indent = row['indent']
 
             row_bg = (
                 _COLOR_ROW_EVEN
@@ -858,22 +1113,14 @@ class MainWindow(QMainWindow):
 
     def _update_managed_section(
         self,
-        processes: list[dict[str, object]],
+        processes: list[RowSnapshot],
     ) -> None:
         """Update the managed tree section with process data or an empty state."""
         self.managed_section.setVisible(True)
         self._update_section_count(self.managed_section, len(processes))
         if not processes:
             tree = self.managed_tree
-            tree.clear()
-            empty_item = QTreeWidgetItem(tree)
-            for col, (val, align) in enumerate(
-                zip(_EMPTY_VALUES, _EMPTY_ALIGNS, strict=True),
-            ):
-                empty_item.setText(col, val)
-                empty_item.setTextAlignment(col, align)
-                empty_item.setBackground(col, _COLOR_ROW_ODD)
-                empty_item.setForeground(col, _COLOR_EMPTY)
+            self._populate_empty_row(tree)
             self._resize_managed_tree()
             return
         self._populate_managed_tree(processes)
@@ -1140,24 +1387,24 @@ class MainWindow(QMainWindow):
         """Build the standard process context menu and return (menu, actions)."""
         menu = QMenu(parent)
         actions: dict[str, QAction | None] = {
-            'copy_cells': menu.addAction('Copy selected cells'),
-            'copy_rows': menu.addAction('Copy selected rows'),
+            'copy_cells': menu.addAction('Copy selected cells'),  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
+            'copy_rows': menu.addAction('Copy selected rows'),  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
         }
         menu.addSeparator()
-        actions['select_row'] = menu.addAction('Select row')
-        actions['select_column'] = menu.addAction('Select column')
-        actions['select_all'] = menu.addAction('Select all')
+        actions['select_row'] = menu.addAction('Select row')  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
+        actions['select_column'] = menu.addAction('Select column')  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
+        actions['select_all'] = menu.addAction('Select all')  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
         actions['open_location'] = None
         actions['terminate_process'] = None
         actions['terminate_tree'] = None
         if row_path is not None:
             menu.addSeparator()
-            actions['open_location'] = menu.addAction('Open file location')
+            actions['open_location'] = menu.addAction('Open file location')  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
         if pid is not None:
             menu.addSeparator()
-            actions['terminate_process'] = menu.addAction('Terminate process')
+            actions['terminate_process'] = menu.addAction('Terminate process')  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
             if has_children:
-                actions['terminate_tree'] = menu.addAction(
+                actions['terminate_tree'] = menu.addAction(  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
                     'Terminate process tree',
                 )
         return menu, actions
@@ -1186,7 +1433,7 @@ class MainWindow(QMainWindow):
         if viewport is None:
             return
 
-        chosen_action = menu.exec(viewport.mapToGlobal(position))
+        chosen_action = menu.exec(viewport.mapToGlobal(position))  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
         if chosen_action is None:
             return
         if self._handle_selection_action(
@@ -1205,6 +1452,8 @@ class MainWindow(QMainWindow):
         """Show row actions for a process item in a tree widget."""
         tree_item = tree.itemAt(position)
         if tree_item is None:
+            return
+        if not tree_item.flags() & Qt.ItemFlag.ItemIsEnabled:
             return
 
         header = tree.header()
@@ -1276,6 +1525,128 @@ class MainWindow(QMainWindow):
                 ):
                     return child
         return None
+
+    def _show_service_tree_context_menu(
+        self, tree: QTreeWidget, position: QPoint,
+    ) -> None:
+        """Show service-specific actions for a row in the service tree."""
+        tree_item = tree.itemAt(position)
+        if tree_item is None:
+            return
+        if not tree_item.flags() & Qt.ItemFlag.ItemIsEnabled:
+            return
+
+        header = tree.header()
+        col_idx = max(header.logicalIndexAt(position.x()) if header else 0, 0)
+
+        selection_model = tree.selectionModel()
+        if selection_model is not None and not selection_model.hasSelection():
+            tree.setCurrentItem(tree_item, col_idx)
+
+        path_text = tree_item.text(PATH_COLUMN_INDEX)
+        row_path = (
+            path_text
+            if path_text not in ('-', '', 'Executable path unavailable')
+            else None
+        )
+        service_name = SERVICE_REGISTRY.get(
+            tree_item.text(NAME_COLUMN_INDEX).lower(),
+        )
+
+        row_index = tree.indexFromItem(tree_item, 0)
+
+        menu = QMenu(tree)
+        actions: dict[str, QAction | None] = {
+            'copy_cells': menu.addAction('Copy selected cells'),  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
+            'copy_rows': menu.addAction('Copy selected rows'),  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
+        }
+        menu.addSeparator()
+        actions['select_row'] = menu.addAction('Select row')  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
+        actions['select_column'] = menu.addAction('Select column')  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
+        actions['select_all'] = menu.addAction('Select all')  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
+        actions['open_location'] = None
+        if row_path is not None:
+            menu.addSeparator()
+            actions['open_location'] = menu.addAction('Open file location')  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
+        actions['stop_service'] = None
+        if service_name is not None:
+            menu.addSeparator()
+            actions['stop_service'] = menu.addAction('Stop service')  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
+
+        viewport = tree.viewport()
+        if viewport is None:
+            return
+
+        chosen_action = menu.exec(viewport.mapToGlobal(position))  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
+        if chosen_action is None:
+            return
+
+        if self._handle_selection_action(
+            chosen_action, actions, tree,
+            row_index=row_index, col_idx=col_idx,
+        ):
+            return
+
+        self._handle_service_menu_action(
+            chosen_action, actions,
+            row_path=row_path, service_name=service_name,
+        )
+
+    def _handle_service_menu_action(
+        self,
+        chosen_action: QAction,
+        actions: dict[str, QAction | None],
+        *,
+        row_path: str | None,
+        service_name: str | None,
+    ) -> None:
+        """Execute the selected service-row context menu action."""
+        if (
+            actions.get('open_location') is not None
+            and chosen_action == actions['open_location']
+            and row_path is not None
+        ):
+            subprocess.run(  # noqa: S603
+                ['explorer', '/select,', row_path],  # noqa: S607
+                check=False,
+            )
+            return
+
+        if (
+            actions.get('stop_service') is not None
+            and chosen_action == actions['stop_service']
+            and service_name is not None
+        ):
+            self._stop_service_and_report(service_name)
+
+    def _stop_service_and_report(self, service_name: str) -> None:
+        """Stop a Windows service and show the result."""
+        ok, detail = stop_windows_service(service_name)
+        if ok:
+            self._popup(
+                'Service Stopped',
+                f'{service_name}: {detail}',
+                QMessageBox.Icon.Information,
+            )
+        elif detail == 'access denied':
+            if not is_running_as_admin():
+                self._offer_uac_elevation(
+                    reason=f'Could not stop {service_name}'
+                    ' without administrator privileges.',
+                )
+            else:
+                self._popup(
+                    'Service Stop Failed',
+                    f'{service_name}: access denied',
+                    QMessageBox.Icon.Warning,
+                )
+        else:
+            self._popup(
+                'Service Stop Failed',
+                f'{service_name}:\n{detail}',
+                QMessageBox.Icon.Warning,
+            )
+        self._refresh_process_info()
 
     def _show_managed_tree_context_menu(self, position: QPoint) -> None:
         """Show row actions for a process item in the managed tree widget."""
@@ -1541,6 +1912,102 @@ class MainWindow(QMainWindow):
             report_sections,
         )
 
+    def start_services(self) -> None:
+        """Start all registered AMD Windows services."""
+        started, already, failed = self._attempt_service_starts()
+        summary, title, icon, needs_elevation = (
+            self._build_service_report(started, already, failed)
+        )
+        sections = self._build_service_sections(started, already, failed)
+        self._report_and_notify(summary, title, icon, sections)
+        if needs_elevation and not is_running_as_admin():
+            self._offer_uac_elevation(
+                reason='Some AMD services could not be started'
+                ' without administrator privileges.',
+            )
+
+    @staticmethod
+    @staticmethod
+    def _build_service_entry(name: str, category: str) -> dict[str, str]:
+        """Build a single service report entry with its binary path and PID."""
+        path = query_service_binary_path(name) or '<unavailable>'
+        pid = query_service_pid(name)
+        return {
+            'name': name,
+            'pid': str(pid) if pid else '-',
+            'category': category,
+            'path': path,
+        }
+
+    def _build_service_sections(
+        self,
+        started: list[str],
+        already: list[str],
+        failed: list[tuple[str, str]],
+    ) -> list[tuple[str, list[dict[str, str]]]]:
+        """Convert service start results into report dialog sections."""
+        sections: list[tuple[str, list[dict[str, str]]]] = []
+        if started:
+            sections.append(('Started', [
+                self._build_service_entry(s, 'Service')
+                for s in started
+            ]))
+        if already:
+            sections.append(('Already Running', [
+                self._build_service_entry(s, 'Service')
+                for s in already
+            ]))
+        if failed:
+            sections.append(('Failed', [
+                self._build_service_entry(s, detail)
+                for s, detail in failed
+            ]))
+        return sections
+
+    @staticmethod
+    def _attempt_service_starts() -> (
+        tuple[list[str], list[str], list[tuple[str, str]]]
+    ):
+        started: list[str] = []
+        already: list[str] = []
+        failed: list[tuple[str, str]] = []
+        for _exe, svc_name in sorted(SERVICE_REGISTRY.items()):
+            ok, detail = start_windows_service(svc_name)
+            if not ok:
+                failed.append((svc_name, detail))
+            elif detail == 'already running':
+                already.append(svc_name)
+            else:
+                started.append(svc_name)
+        return started, already, failed
+
+    @staticmethod
+    def _build_service_report(
+        started: list[str],
+        already: list[str],
+        failed: list[tuple[str, str]],
+    ) -> tuple[str, str, QMessageBox.Icon, bool]:
+        lines: list[str] = []
+        if started:
+            lines.append(f'Started {len(started)} service(s):')
+            lines.extend(f'  • {s}' for s in started)
+        if already:
+            lines.append(f'{len(already)} service(s) already running:')
+            lines.extend(f'  • {s}' for s in already)
+        if failed:
+            lines.append(f'{len(failed)} service(s) failed:')
+            for svc, detail in failed:
+                lines.extend((f'  • {svc}', f'    {detail}'))
+        summary = '\n'.join(lines) if lines else 'No services configured.'
+        icon = QMessageBox.Icon.Information
+        title = 'AMD Services'
+        needs_elevation = False
+        if failed:
+            icon = QMessageBox.Icon.Warning
+            title = 'AMD Services (partial)'
+            needs_elevation = any('access' in d.lower() for _, d in failed)
+        return summary, title, icon, needs_elevation
+
     def _set_monitor_badge(self, *, is_running: bool) -> None:
         """Update the monitor badge text and style based on running state."""
         new_name = 'badge_running' if is_running else 'badge_stopped'
@@ -1572,39 +2039,28 @@ class MainWindow(QMainWindow):
         try:
             snapshot = collect_refresh_snapshot(process_path)
         except (RuntimeError, ValueError, TypeError, psutil.Error, OSError) as exc:
-            self._refresh.bridge.snapshot_ready.emit({'error': str(exc)})
+            if self._refresh.closing:
+                return
+            self._refresh.bridge.emit_snapshot({'error': str(exc)})
             return
 
-        self._refresh.bridge.snapshot_ready.emit(snapshot)
+        if self._refresh.closing:
+            return
+        self._refresh.bridge.emit_snapshot(snapshot)
 
-    def _apply_refresh_snapshot(self, snapshot: object) -> None:
+    def _apply_refresh_snapshot(self, snapshot: SnapshotPayload) -> None:
         """Apply worker-produced refresh data on the GUI thread."""
         self._refresh.in_flight = False
 
-        if isinstance(snapshot, dict) and 'error' not in snapshot:
-            is_running = bool(snapshot.get('is_running', False))
-            managed_rows = snapshot.get('managed_rows', [])
-            companion_rows = snapshot.get('companion_rows', [])
-            service_rows = snapshot.get('service_rows', [])
-
-            if (
-                isinstance(managed_rows, list)
-                and isinstance(companion_rows, list)
-                and isinstance(service_rows, list)
-            ):
-                self._set_monitor_badge(is_running=is_running)
-                self._update_managed_section(managed_rows)
-                self._update_process_section(
-                    self.companion_section,
-                    self.companion_tree,
-                    companion_rows,
-                )
-                self._update_process_section(
-                    self.service_section,
-                    self.service_tree,
-                    service_rows,
-                    muted=True,
-                )
+        if 'error' not in snapshot:
+            self._set_monitor_badge(is_running=snapshot['is_running'])
+            self._update_managed_section(snapshot['managed_rows'])
+            self._update_companion_section(snapshot['companion_rows'])
+            self._update_process_section(
+                self.service_section,
+                self.service_tree,
+                snapshot['service_rows'],
+            )
 
         if self._refresh.pending:
             self._refresh.pending = False

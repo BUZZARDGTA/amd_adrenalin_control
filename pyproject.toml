@@ -12,7 +12,9 @@ requires-python = ">=3.13"
 dependencies = [
     "psutil",
     "PyQt6",
+    "pywin32",
     "types-psutil",
+    "types-pywin32",
 ]
 
 [project.urls]
@@ -33,7 +35,16 @@ version = {attr = "amd_adrenalin_control.__version__"}
 where = ["src"]
 
 [tool.pylint.master]
-extension-pkg-allow-list = ["PyQt6"]
+extension-pkg-allow-list = ["PyQt6", "pywintypes", "win32service", "win32serviceutil", "winerror"]
+generated-members = ["pywintypes.error"]
+
+[tool.pylint.messages_control]
+enable = "all"
+disable = ["locally-disabled", "suppressed-message", "useless-suppression"]
+
+[tool.pyright]
+extraPaths = ["src"]
+typeCheckingMode = "strict"
 
 [tool.ruff.format]
 quote-style = "single"

@@ -11,6 +11,7 @@ This repository is a Windows-only PyQt6 desktop utility for controlling and moni
 - Keep Windows elevation/privilege checks in `src/amd_adrenalin_control/uac.py`.
 - Keep structured report generation in `src/amd_adrenalin_control/_report_helpers.py` and user-facing dialogs in `src/amd_adrenalin_control/dialogs.py`.
 - Keep style/theme constants in `src/amd_adrenalin_control/_stylesheet.py` and domain constants in `src/amd_adrenalin_control/constants.py`.
+- Keep UI selection/copy utilities and runtime type helpers in `src/amd_adrenalin_control/ui_helpers.py`.
 
 ## Build And Run
 - Create venv: `python -m venv .venv`
@@ -30,7 +31,7 @@ This repository is a Windows-only PyQt6 desktop utility for controlling and moni
 - Keep constants centralized; avoid scattering duplicated process names, paths, or style values.
 - Keep psutil interactions defensive: handle `NoSuchProcess` and `AccessDenied` gracefully.
 - Keep termination behavior graceful-first (`terminate` + wait) with kill fallback for stubborn descendants.
-- For Qt table hover behavior, ensure mouse tracking remains enabled on both table and viewport when hover styling is involved.
+- For Qt tree widget hover behavior, ensure mouse tracking remains enabled on both the tree and its viewport when hover styling is involved.
 - For stop/failure reporting, prefer confirming PID identity (`pid` + `create_time`) before showing persistent failure/elevation guidance.
 
 ## Platform Constraints
