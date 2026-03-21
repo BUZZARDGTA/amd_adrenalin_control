@@ -8,7 +8,7 @@ dynamic = ["version"]
 description = "PyQt6 desktop utility for AMD Adrenalin Control to start, stop, restart, and monitor AMD Adrenalin processes on Windows."
 readme = "README.md"
 license = { text = "GPL-3.0-only" }
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 dependencies = [
     "psutil",
     "PyQt6",

@@ -3,7 +3,7 @@
 import contextlib
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -50,7 +50,7 @@ class RefreshState:
     bridge: RefreshBridge
     in_flight: bool = False
     pending: bool = False
-    closing: bool = False
+    closing: threading.Event = field(default_factory=threading.Event)
 
 
 class ActionsMixin:
@@ -681,14 +681,14 @@ class ActionsMixin:
         lines: list[str] = []
         if started:
             lines.append(f'Started {len(started)} service(s):')
-            lines.extend(f'  Ã¢â‚¬Â¢ {s}' for s in started)
+            lines.extend(f'  \u2022 {s}' for s in started)
         if already:
             lines.append(f'{len(already)} service(s) already running:')
-            lines.extend(f'  Ã¢â‚¬Â¢ {s}' for s in already)
+            lines.extend(f'  \u2022 {s}' for s in already)
         if failed:
             lines.append(f'{len(failed)} service(s) failed:')
             for svc, detail in failed:
-                lines.extend((f'  Ã¢â‚¬Â¢ {svc}', f'    {detail}'))
+                lines.extend((f'  \u2022 {svc}', f'    {detail}'))
         summary = '\n'.join(lines) if lines else 'No services configured.'
         icon = QMessageBox.Icon.Information
         title = 'AMD Services'
@@ -707,7 +707,7 @@ class ActionsMixin:
         if self.status_badge.objectName() == new_name:
             return
         self.status_badge.setText(
-            'Ã¢â€”Â RUNNING' if is_running else 'Ã¢â€”Â NOT RUNNING',
+            '\u25cf RUNNING' if is_running else '\u25cf NOT RUNNING',
         )
         self.status_badge.setObjectName(new_name)
         self.status_badge.setStyle(
@@ -734,12 +734,12 @@ class ActionsMixin:
         try:
             snapshot = collect_refresh_snapshot(process_path)
         except (RuntimeError, ValueError, TypeError, psutil.Error, OSError) as exc:
-            if self._refresh.closing:
+            if self._refresh.closing.is_set():
                 return
             self._refresh.bridge.emit_snapshot({'error': str(exc)})
             return
 
-        if self._refresh.closing:
+        if self._refresh.closing.is_set():
             return
         self._refresh.bridge.emit_snapshot(snapshot)
 

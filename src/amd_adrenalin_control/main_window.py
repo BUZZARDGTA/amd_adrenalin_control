@@ -143,7 +143,7 @@ class MainWindow(  # pylint: disable=too-many-ancestors
     ) -> None:
         """Stop the refresh timer and prevent worker emits on close."""
         self._timer.stop()
-        self._refresh.closing = True
+        self._refresh.closing.set()
         super().closeEvent(a0)
 
     # ------------------------------------------------------------------

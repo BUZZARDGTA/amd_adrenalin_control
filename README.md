@@ -19,7 +19,7 @@ PyQt6 desktop utility for Windows to control AMD Adrenalin and monitor related A
 ## Requirements
 
 - Windows 10/11
-- Python 3.13+
+- Python 3.14+
 - AMD Adrenalin installed at:
   - `C:/Program Files/AMD/CNext/CNext/RadeonSoftware.exe`
 

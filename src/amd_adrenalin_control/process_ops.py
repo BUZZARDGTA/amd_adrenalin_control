@@ -14,8 +14,12 @@ def get_pid_by_path(filepath: Path) -> int | None:
     """Return the PID of the process matching filepath, or None."""
     target = os.path.normcase(str(filepath.absolute()))
     for process in psutil.process_iter(['pid', 'exe']):
-        if os.path.normcase(process.info['exe'] or '') == target:
-            return process.pid
+        try:
+            exe = process.info.get('exe')
+            if exe and os.path.normcase(exe) == target:
+                return process.pid
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
     return None
 
 
