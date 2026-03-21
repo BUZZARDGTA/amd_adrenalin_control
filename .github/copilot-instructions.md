@@ -16,9 +16,8 @@ This repository is a Windows-only PyQt6 desktop utility for controlling and moni
 ## Build And Run
 - Create venv: `python -m venv .venv`
 - Activate (PowerShell): `.venv\\Scripts\\Activate.ps1`
-- Install deps: `pip install -r requirements.txt`
-- Run app: `python main.py`
-- Optional install as script: `pip install .` then `amd-adrenalin-control`
+- Install deps (editable): `pip install -e .`
+- Run app: `python main.py` (or equivalently: `amd-adrenalin-control`)
 
 ## Testing And Validation
 - No automated test suite is currently configured.

@@ -28,7 +28,7 @@ PyQt6 desktop utility for Windows to control AMD Adrenalin and monitor related A
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
-pip install -r requirements.txt
+pip install -e .
 ```
 
 ## Run
@@ -37,12 +37,11 @@ pip install -r requirements.txt
 python main.py
 ```
 
-## Optional: install as a script
+## Optional: install as a named command
 
-This project defines a script entrypoint in `pyproject.toml`:
+After installation, you can also launch via:
 
 ```bash
-pip install .
 amd-adrenalin-control
 ```
 
@@ -58,8 +57,7 @@ amd-adrenalin-control
 - `src/amd_adrenalin_control/_stylesheet.py`: Application stylesheet
 - `src/amd_adrenalin_control/constants.py`: App constants and process name sets
 - `src/amd_adrenalin_control/ui_helpers.py`: UI selection, copy, and runtime type helpers
-- `requirements.txt`: Runtime dependencies
-- `pyproject.toml`: Project metadata and tooling config
+- `pyproject.toml`: Project metadata, dependencies, and tooling config
 
 ## Notes
 
