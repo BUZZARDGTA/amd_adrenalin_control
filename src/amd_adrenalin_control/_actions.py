@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import psutil
 from PyQt6.QtCore import QCoreApplication
-from PyQt6.QtWidgets import QLabel, QMessageBox, QTreeWidget, QWidget
+from PyQt6.QtWidgets import QLabel, QMainWindow, QMessageBox, QTreeWidget, QWidget
 
 from ._report_helpers import (
     build_stop_all_report_sections,
@@ -18,8 +18,10 @@ from ._report_helpers import (
 )
 from .constants import (
     COMPANION_NAMES,
-    SERVICE_NAMES,
     SERVICE_REGISTRY,
+    SVC_DETAIL_ACCESS_DENIED,
+    SVC_DETAIL_ALREADY_RUNNING,
+    TRACKED_PROCESS_NAMES,
 )
 from .dialogs import NotificationDialog, ProcessReportDialog
 from .process_ops import (
@@ -40,6 +42,10 @@ from .uac import is_debug_session, is_running_as_admin, request_self_elevation
 if TYPE_CHECKING:
     from .refresh_snapshot import RowSnapshot
 
+    _ActionsBase = QMainWindow
+else:
+    _ActionsBase = object
+
 PROCESS_CREATE_TIME_EPSILON = 0.001
 
 
@@ -53,7 +59,7 @@ class RefreshState:
     closing: threading.Event = field(default_factory=threading.Event)
 
 
-class ActionsMixin:
+class ActionsMixin(_ActionsBase):
     """Mixin providing process control, service management, and refresh methods."""
 
     if TYPE_CHECKING:
@@ -160,13 +166,16 @@ class ActionsMixin:
         denied_pids: set[int],
     ) -> tuple[list[int], list[int], list[int]]:
         """Split attempted pids into closed, denied, and already-gone groups."""
-        stopped_known = [pid for pid in attempted_pids if pid in stopped_pids]
-        denied_known = [pid for pid in attempted_pids if pid in denied_pids]
-        gone_known = [
-            pid for pid in attempted_pids
-            if pid not in stopped_pids
-            and pid not in denied_pids
-        ]
+        stopped_known: list[int] = []
+        denied_known: list[int] = []
+        gone_known: list[int] = []
+        for pid in attempted_pids:
+            if pid in stopped_pids:
+                stopped_known.append(pid)
+            elif pid in denied_pids:
+                denied_known.append(pid)
+            else:
+                gone_known.append(pid)
         return stopped_known, denied_known, gone_known
 
     # -- Process termination -------------------------------------------
@@ -262,7 +271,7 @@ class ActionsMixin:
         self: ActionsMixin, title: str, text: str, icon: QMessageBox.Icon,
     ) -> None:
         """Show a styled in-app modal dialog for status and report messages."""
-        dialog = NotificationDialog(self, title, text, icon)  # type: ignore[arg-type]
+        dialog = NotificationDialog(self, title, text, icon)
         dialog.exec()
 
     def _offer_uac_elevation(self: ActionsMixin, *, reason: str) -> None:
@@ -276,7 +285,7 @@ class ActionsMixin:
             return
 
         answer = QMessageBox.question(
-            self,  # type: ignore[arg-type]
+            self,
             'Administrator privileges required',
             f'{reason}\n\nWould you like to relaunch this app as administrator now?',
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
@@ -315,16 +324,7 @@ class ActionsMixin:
     ) -> None:
         """Update the status bar and show a process-report dialog."""
         self.status_label.setText(status_text)
-        self._show_process_report(dialog_title, icon, sections)
-
-    def _show_process_report(
-        self: ActionsMixin,
-        title: str,
-        icon: QMessageBox.Icon,
-        sections: list[tuple[str, list[dict[str, str]]]],
-    ) -> None:
-        """Show a structured process report dialog."""
-        dialog = ProcessReportDialog(self, title, icon, sections)  # type: ignore[arg-type]
+        dialog = ProcessReportDialog(self, dialog_title, icon, sections)
         dialog.exec()
 
     # -- Report data collection ----------------------------------------
@@ -552,14 +552,13 @@ class ActionsMixin:
         )
 
         attempted_pids = sorted(target_categories)
-        stopped_known, denied_known, gone_known_unsorted = (
+        stopped_known, denied_known, gone_known = (
             self._classify_attempted_pids(
                 attempted_pids,
                 stopped_pids,
                 denied_pids,
             )
         )
-        gone_known = sorted(gone_known_unsorted)
 
         report_sections = self._build_report_sections_from_pid_groups(
             process_info,
@@ -635,23 +634,16 @@ class ActionsMixin:
         failed: list[tuple[str, str]],
     ) -> list[tuple[str, list[dict[str, str]]]]:
         """Convert service start results into report dialog sections."""
-        sections: list[tuple[str, list[dict[str, str]]]] = []
-        if started:
-            sections.append(('Started', [
-                self._build_service_entry(s, 'Service')
-                for s in started
-            ]))
-        if already:
-            sections.append(('Already Running', [
-                self._build_service_entry(s, 'Service')
-                for s in already
-            ]))
-        if failed:
-            sections.append(('Failed', [
-                self._build_service_entry(s, detail)
-                for s, detail in failed
-            ]))
-        return sections
+        groups: list[tuple[str, list[tuple[str, str]]]] = [
+            ('Started', [(s, 'Service') for s in started]),
+            ('Already Running', [(s, 'Service') for s in already]),
+            ('Failed', failed),
+        ]
+        return [
+            (title, [self._build_service_entry(name, cat) for name, cat in entries])
+            for title, entries in groups
+            if entries
+        ]
 
     @staticmethod
     def _attempt_service_starts() -> (
@@ -661,11 +653,11 @@ class ActionsMixin:
         started: list[str] = []
         already: list[str] = []
         failed: list[tuple[str, str]] = []
-        for _exe, svc_name in sorted(SERVICE_REGISTRY.items()):
+        for svc_name in sorted(SERVICE_REGISTRY.values()):
             ok, detail = start_windows_service(svc_name)
             if not ok:
                 failed.append((svc_name, detail))
-            elif detail == 'already running':
+            elif detail == SVC_DETAIL_ALREADY_RUNNING:
                 already.append(svc_name)
             else:
                 started.append(svc_name)
@@ -696,7 +688,7 @@ class ActionsMixin:
         if failed:
             icon = QMessageBox.Icon.Warning
             title = 'AMD Services (partial)'
-            needs_elevation = any('access' in d.lower() for _, d in failed)
+            needs_elevation = any(d == SVC_DETAIL_ACCESS_DENIED for _, d in failed)
         return summary, title, icon, needs_elevation
 
     # -- Refresh mechanism ---------------------------------------------
@@ -749,7 +741,11 @@ class ActionsMixin:
         """Apply worker-produced refresh data on the GUI thread."""
         self._refresh.in_flight = False
 
-        if 'error' not in snapshot:
+        if 'error' in snapshot:
+            self.status_label.setText(
+                f'Monitor refresh failed: {snapshot["error"]}',
+            )
+        else:
             self._set_monitor_badge(is_running=snapshot['is_running'])
             self.update_managed_section(snapshot['managed_rows'])
             self.update_companion_section(snapshot['companion_rows'])
@@ -792,14 +788,13 @@ class ActionsMixin:
         process_info: dict[int, dict[str, str]],
     ) -> None:
         """Collect companion/service processes and their child targets."""
-        tracked_names = COMPANION_NAMES | SERVICE_NAMES
         for proc in psutil.process_iter(['pid', 'name']):
             try:
                 name = proc.info.get('name')
                 if not isinstance(name, str):
                     continue
                 name_lower = name.lower()
-                if name_lower not in tracked_names:
+                if name_lower not in TRACKED_PROCESS_NAMES:
                     continue
 
                 category = 'Companion' if name_lower in COMPANION_NAMES else 'Service'

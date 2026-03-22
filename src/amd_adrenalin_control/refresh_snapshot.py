@@ -6,7 +6,7 @@ from typing import TypedDict
 import psutil
 from PyQt6.QtCore import QObject, pyqtSignal
 
-from .constants import COMPANION_NAMES, SERVICE_NAMES
+from .constants import COMPANION_NAMES, PATH_UNAVAILABLE, SERVICE_NAMES, SYSTEM_PIDS
 
 
 class RowSnapshot(TypedDict):
@@ -77,17 +77,16 @@ def build_row_snapshot(proc: psutil.Process, indent: int) -> RowSnapshot | None:
             mem_text = f'{mem_mb:.1f} MB'
             status = str(proc.status())
             try:
-                exe_path = proc.exe()
-                path_text = exe_path or 'Executable path unavailable'
+                path_text = proc.exe() or PATH_UNAVAILABLE
             except (psutil.NoSuchProcess, psutil.AccessDenied):
-                path_text = 'Executable path unavailable'
+                path_text = PATH_UNAVAILABLE
             pid_value: int | None = proc.pid
     except psutil.NoSuchProcess:
         return None
     except psutil.AccessDenied:
         name, path_text, pid_text, cpu_text, mem_text, status = (
             '<restricted>',
-            'Executable path unavailable',
+            PATH_UNAVAILABLE,
             str(proc.pid),
             '-',
             '-',
@@ -184,7 +183,7 @@ def _find_companion_root(
             break
         if (
             parent is None
-            or parent.pid in (0, 4)
+            or parent.pid in SYSTEM_PIDS
             or parent.pid in managed_pids
         ):
             break
@@ -258,6 +257,17 @@ def split_companion_and_service_rows(
     )
 
 
+def _build_rows(
+    entries: list[tuple[psutil.Process, int]],
+) -> list[RowSnapshot]:
+    """Build row snapshots from process-indent pairs, filtering gone processes."""
+    return [
+        row
+        for proc, indent in entries
+        if (row := build_row_snapshot(proc, indent)) is not None
+    ]
+
+
 def collect_refresh_snapshot(process_path: str) -> RefreshSnapshot:
     """Collect all data needed to refresh monitor tables in a worker thread."""
     all_procs = collect_running_processes()
@@ -271,19 +281,7 @@ def collect_refresh_snapshot(process_path: str) -> RefreshSnapshot:
 
     return {
         'is_running': bool(main_rows),
-        'managed_rows': [
-            row
-            for proc, indent in main_rows
-            if (row := build_row_snapshot(proc, indent)) is not None
-        ],
-        'companion_rows': [
-            row
-            for proc, indent in companion_rows
-            if (row := build_row_snapshot(proc, indent)) is not None
-        ],
-        'service_rows': [
-            row
-            for proc in service_rows
-            if (row := build_row_snapshot(proc, 0)) is not None
-        ],
+        'managed_rows': _build_rows(main_rows),
+        'companion_rows': _build_rows(companion_rows),
+        'service_rows': _build_rows([(proc, 0) for proc in service_rows]),
     }

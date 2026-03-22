@@ -1,5 +1,7 @@
 """Application entrypoint for AMD Adrenalin Control."""
 
+import sys
+
 from PyQt6.QtWidgets import QApplication
 
 from amd_adrenalin_control.main_window import MainWindow
@@ -13,7 +15,7 @@ def main() -> None:
     window = MainWindow()
     window.show()
 
-    app.exec()
+    sys.exit(app.exec())
 
 
 if __name__ == '__main__':

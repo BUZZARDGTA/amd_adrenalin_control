@@ -8,6 +8,7 @@ import psutil
 from PyQt6.QtCore import QModelIndex, QPoint, Qt
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
+    QMainWindow,
     QMenu,
     QMessageBox,
     QTreeWidget,
@@ -15,7 +16,13 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .constants import SERVICE_REGISTRY
+from .constants import (
+    INVALID_PATH_VALUES,
+    NAME_COLUMN_INDEX,
+    PATH_COLUMN_INDEX,
+    SERVICE_REGISTRY,
+    SVC_DETAIL_ACCESS_DENIED,
+)
 from .process_ops import stop_windows_service
 from .uac import is_running_as_admin
 from .ui_helpers import (
@@ -25,9 +32,6 @@ from .ui_helpers import (
     select_column,
     select_row,
 )
-
-PATH_COLUMN_INDEX = 1
-NAME_COLUMN_INDEX = 0
 
 
 class _MenuContext(NamedTuple):
@@ -40,7 +44,21 @@ class _MenuContext(NamedTuple):
     col_idx: int
 
 
-class ContextMenuMixin:
+class _MenuTarget(NamedTuple):
+    """Resolved tree item and column context for a context menu invocation."""
+
+    item: QTreeWidgetItem
+    col_idx: int
+    row_path: str | None
+
+
+if TYPE_CHECKING:
+    _ContextMenuBase = QMainWindow
+else:
+    _ContextMenuBase = object
+
+
+class ContextMenuMixin(_ContextMenuBase):
     """Mixin providing context-menu methods for MainWindow."""
 
     if TYPE_CHECKING:
@@ -84,7 +102,7 @@ class ContextMenuMixin:
         )
         process_label = self._format_process_label(pid)
         answer = QMessageBox.question(
-            self,  # type: ignore[arg-type]
+            self,
             'Confirm terminate',
             (
                 f'Are you sure you want to {action_text}?'
@@ -120,6 +138,14 @@ class ContextMenuMixin:
             return False
         return True
 
+    @staticmethod
+    def _open_file_location(row_path: str) -> None:
+        """Open Windows Explorer with the given file path selected."""
+        subprocess.run(  # noqa: S603
+            ['explorer', f'/select,{row_path}'],  # noqa: S607
+            check=False,
+        )
+
     def _handle_process_menu_action(
         self: ContextMenuMixin,
         *,
@@ -141,10 +167,7 @@ class ContextMenuMixin:
             and chosen_action == open_location_action
             and row_path is not None
         ):
-            subprocess.run(  # noqa: S603
-                ['explorer', '/select,', row_path],  # noqa: S607
-                check=False,
-            )
+            self._open_file_location(row_path)
             return
 
         if (
@@ -174,14 +197,7 @@ class ContextMenuMixin:
     ) -> tuple[QMenu, dict[str, QAction | None]]:
         """Build the standard process context menu and return (menu, actions)."""
         menu = QMenu(parent)
-        actions: dict[str, QAction | None] = {
-            'copy_cells': menu.addAction('Copy selected cells'),  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
-            'copy_rows': menu.addAction('Copy selected rows'),  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
-        }
-        menu.addSeparator()
-        actions['select_row'] = menu.addAction('Select row')  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
-        actions['select_column'] = menu.addAction('Select column')  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
-        actions['select_all'] = menu.addAction('Select all')  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
+        actions = self._build_common_menu_actions(menu)
         actions['open_location'] = None
         actions['terminate_process'] = None
         actions['terminate_tree'] = None
@@ -196,6 +212,21 @@ class ContextMenuMixin:
                     'Terminate process tree',
                 )
         return menu, actions
+
+    @staticmethod
+    def _build_common_menu_actions(
+        menu: QMenu,
+    ) -> dict[str, QAction | None]:
+        """Build copy/select actions shared by all context menus."""
+        actions: dict[str, QAction | None] = {
+            'copy_cells': menu.addAction('Copy selected cells'),  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
+            'copy_rows': menu.addAction('Copy selected rows'),  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
+        }
+        menu.addSeparator()
+        actions['select_row'] = menu.addAction('Select row')  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
+        actions['select_column'] = menu.addAction('Select column')  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
+        actions['select_all'] = menu.addAction('Select all')  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
+        return actions
 
     def _dispatch_context_menu(
         self: ContextMenuMixin,
@@ -227,51 +258,55 @@ class ContextMenuMixin:
             row_path=ctx.row_path,
         )
 
+    @staticmethod
+    def _resolve_menu_target(
+        tree: QTreeWidget, position: QPoint,
+    ) -> _MenuTarget | None:
+        """Resolve the tree item and column context at a click position."""
+        tree_item = tree.itemAt(position)
+        if tree_item is None:
+            return None
+        if not tree_item.flags() & Qt.ItemFlag.ItemIsEnabled:
+            return None
+        header = tree.header()
+        col_idx = max(header.logicalIndexAt(position.x()) if header else 0, 0)
+        selection_model = tree.selectionModel()
+        if selection_model is not None and not selection_model.hasSelection():
+            tree.setCurrentItem(tree_item, col_idx)
+        path_text = tree_item.text(PATH_COLUMN_INDEX)
+        row_path = (
+            path_text
+            if path_text not in INVALID_PATH_VALUES
+            else None
+        )
+        return _MenuTarget(item=tree_item, col_idx=col_idx, row_path=row_path)
+
     def show_tree_context_menu(
         self: ContextMenuMixin,
         tree: QTreeWidget,
         position: QPoint,
     ) -> None:
         """Show row actions for a process item in a tree widget."""
-        tree_item = tree.itemAt(position)
-        if tree_item is None:
+        target = self._resolve_menu_target(tree, position)
+        if target is None:
             return
-        if not tree_item.flags() & Qt.ItemFlag.ItemIsEnabled:
-            return
-
-        header = tree.header()
-        col_idx = max(header.logicalIndexAt(position.x()) if header else 0, 0)
-
-        selection_model = tree.selectionModel()
-        if selection_model is not None and not selection_model.hasSelection():
-            tree.setCurrentItem(tree_item, col_idx)
 
         pid: int | None = None
-        pid_data = tree_item.data(NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole)
+        pid_data = target.item.data(NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole)
         if isinstance(pid_data, int):
             pid = pid_data
 
-        path_text = tree_item.text(PATH_COLUMN_INDEX)
-        row_path = (
-            path_text
-            if path_text not in ('-', '', 'Executable path unavailable')
-            else None
-        )
-        current_item = self._find_tree_item_by_pid(tree, pid)
         self._dispatch_context_menu(
             tree, position,
             _MenuContext(
                 pid=pid,
-                row_path=row_path,
+                row_path=target.row_path,
                 has_children=(
-                    self._tree_item_has_children(tree_item, pid)
+                    self._tree_item_has_children(target.item, pid)
                     if pid is not None else False
                 ),
-                row_index=(
-                    tree.indexFromItem(current_item, 0)
-                    if current_item is not None else None
-                ),
-                col_idx=col_idx,
+                row_index=tree.indexFromItem(target.item, 0),
+                col_idx=target.col_idx,
             ),
         )
 
@@ -281,74 +316,27 @@ class ContextMenuMixin:
         if tree_item.childCount() > 0:
             return True
         with contextlib.suppress(psutil.Error):
-            return len(psutil.Process(pid).children(recursive=False)) > 0
+            return bool(psutil.Process(pid).children(recursive=False))
         return False
-
-    @staticmethod
-    def _find_tree_item_by_pid(
-        tree: QTreeWidget,
-        pid: int | None,
-    ) -> QTreeWidgetItem | None:
-        """Find a tree item matching *pid*, or None if not found."""
-        if pid is None:
-            return None
-        for i in range(tree.topLevelItemCount()):
-            top = tree.topLevelItem(i)
-            if top is None:
-                continue
-            if top.data(NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole) == pid:
-                return top
-            for j in range(top.childCount()):
-                child = top.child(j)
-                if (
-                    child is not None
-                    and child.data(
-                        NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole,
-                    ) == pid
-                ):
-                    return child
-        return None
 
     def _show_service_tree_context_menu(
         self: ContextMenuMixin, tree: QTreeWidget, position: QPoint,
     ) -> None:
         """Show service-specific actions for a row in the service tree."""
-        tree_item = tree.itemAt(position)
-        if tree_item is None:
-            return
-        if not tree_item.flags() & Qt.ItemFlag.ItemIsEnabled:
+        target = self._resolve_menu_target(tree, position)
+        if target is None:
             return
 
-        header = tree.header()
-        col_idx = max(header.logicalIndexAt(position.x()) if header else 0, 0)
-
-        selection_model = tree.selectionModel()
-        if selection_model is not None and not selection_model.hasSelection():
-            tree.setCurrentItem(tree_item, col_idx)
-
-        path_text = tree_item.text(PATH_COLUMN_INDEX)
-        row_path = (
-            path_text
-            if path_text not in ('-', '', 'Executable path unavailable')
-            else None
-        )
         service_name = SERVICE_REGISTRY.get(
-            tree_item.text(NAME_COLUMN_INDEX).lower(),
+            target.item.text(NAME_COLUMN_INDEX).lower(),
         )
 
-        row_index = tree.indexFromItem(tree_item, 0)
+        row_index = tree.indexFromItem(target.item, 0)
 
         menu = QMenu(tree)
-        actions: dict[str, QAction | None] = {
-            'copy_cells': menu.addAction('Copy selected cells'),  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
-            'copy_rows': menu.addAction('Copy selected rows'),  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
-        }
-        menu.addSeparator()
-        actions['select_row'] = menu.addAction('Select row')  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
-        actions['select_column'] = menu.addAction('Select column')  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
-        actions['select_all'] = menu.addAction('Select all')  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
+        actions = self._build_common_menu_actions(menu)
         actions['open_location'] = None
-        if row_path is not None:
+        if target.row_path is not None:
             menu.addSeparator()
             actions['open_location'] = menu.addAction('Open file location')  # pyright: ignore[reportUnknownMemberType]  # pylint: disable=line-too-long
         actions['stop_service'] = None
@@ -366,13 +354,13 @@ class ContextMenuMixin:
 
         if self._handle_selection_action(
             chosen_action, actions, tree,
-            row_index=row_index, col_idx=col_idx,
+            row_index=row_index, col_idx=target.col_idx,
         ):
             return
 
         self._handle_service_menu_action(
             chosen_action, actions,
-            row_path=row_path, service_name=service_name,
+            row_path=target.row_path, service_name=service_name,
         )
 
     def _handle_service_menu_action(
@@ -389,10 +377,7 @@ class ContextMenuMixin:
             and chosen_action == actions['open_location']
             and row_path is not None
         ):
-            subprocess.run(  # noqa: S603
-                ['explorer', '/select,', row_path],  # noqa: S607
-                check=False,
-            )
+            self._open_file_location(row_path)
             return
 
         if (
@@ -413,7 +398,7 @@ class ContextMenuMixin:
                 f'{service_name}: {detail}',
                 QMessageBox.Icon.Information,
             )
-        elif detail == 'access denied':
+        elif detail == SVC_DETAIL_ACCESS_DENIED:
             if not is_running_as_admin():
                 self._offer_uac_elevation(
                     reason=f'Could not stop {service_name}'
@@ -422,7 +407,7 @@ class ContextMenuMixin:
             else:
                 self._popup(
                     'Service Stop Failed',
-                    f'{service_name}: access denied',
+                    f'{service_name}: {SVC_DETAIL_ACCESS_DENIED}',
                     QMessageBox.Icon.Warning,
                 )
         else:

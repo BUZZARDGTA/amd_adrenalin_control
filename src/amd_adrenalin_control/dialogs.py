@@ -17,13 +17,13 @@ from PyQt6.QtWidgets import (
 from .ui_helpers import require_qheader_view
 
 _DIALOG_BASE_STYLESHEET = """\
-QDialog {{
+QDialog {
     background-color: #0c1320;
     color: #d7e3f5;
     border: 1px solid #1d2b43;
     border-radius: 12px;
-}}
-QDialogButtonBox QPushButton {{
+}
+QDialogButtonBox QPushButton {
     background-color: #1f6feb;
     color: #ffffff;
     border: none;
@@ -32,13 +32,13 @@ QDialogButtonBox QPushButton {{
     font-weight: 700;
     padding: 8px 16px;
     min-width: 90px;
-}}
-QDialogButtonBox QPushButton:hover {{
+}
+QDialogButtonBox QPushButton:hover {
     background-color: #3a82f7;
-}}
-QDialogButtonBox QPushButton:pressed {{
+}
+QDialogButtonBox QPushButton:pressed {
     background-color: #1759bf;
-}}
+}
 """
 
 
@@ -71,10 +71,8 @@ class NotificationDialog(QDialog):
         body = QLabel('Details', self)
         body.setObjectName('dialog_subheading')
 
-        content = QTableWidget(0, 1, self)
+        content = QTableWidget(1, 1, self)
         content.setObjectName('dialog_text')
-        content.setRowCount(1)
-        content.setColumnCount(1)
         h_header = require_qheader_view(
             content.horizontalHeader(),
             'dialog horizontal header',
@@ -114,7 +112,7 @@ class NotificationDialog(QDialog):
         layout.addWidget(buttons)
 
         self.setStyleSheet(
-            _DIALOG_BASE_STYLESHEET.format()
+            _DIALOG_BASE_STYLESHEET
             + f"""
             QLabel#dialog_heading {{
                 color: {accent};
@@ -207,7 +205,7 @@ class ProcessReportDialog(QDialog):
         root.addWidget(buttons)
 
         self.setStyleSheet(
-            _DIALOG_BASE_STYLESHEET.format()
+            _DIALOG_BASE_STYLESHEET
             + f"""
             QScrollArea#report_scroll,
             QWidget#report_viewport,

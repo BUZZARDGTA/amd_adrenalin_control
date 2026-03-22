@@ -10,6 +10,12 @@ from pathlib import Path
 _SHELL_EXECUTE_SUCCESS_MIN = 32
 
 
+class _TokenElevation(ctypes.Structure):  # pylint: disable=too-few-public-methods
+    """Maps to the Windows TOKEN_ELEVATION struct."""
+
+    _fields_ = [('TokenIsElevated', wintypes.DWORD)]
+
+
 def is_running_as_admin() -> bool:
     """Check whether Windows admin privileges are active."""
     if os.name != 'nt':
@@ -27,13 +33,7 @@ def is_running_as_admin() -> bool:
     if not opened:
         return False
 
-    # pylint: disable-next=too-few-public-methods
-    class TokenElevation(ctypes.Structure):
-        """Maps to the Windows TOKEN_ELEVATION struct."""
-
-        _fields_ = [('TokenIsElevated', wintypes.DWORD)]
-
-    elevation = TokenElevation()
+    elevation = _TokenElevation()
     return_length = wintypes.DWORD(0)
     try:
         queried = ctypes.windll.advapi32.GetTokenInformation(
@@ -106,7 +106,7 @@ def _resolve_entry_script() -> Path | None:
 
 def _resolve_windows_python_executable() -> str:
     """Prefer pythonw.exe on Windows to avoid opening an extra console window."""
-    current = Path(sys.executable)
+    current = Path(sys.executable).resolve()
     pythonw = current.with_name('pythonw.exe')
     if pythonw.exists():
         return str(pythonw)

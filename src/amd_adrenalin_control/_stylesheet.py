@@ -56,6 +56,15 @@ QPushButton#stop_all_btn:hover {
 QPushButton#stop_all_btn:pressed {
     background-color: #7a1616;
 }
+QPushButton#start_services_btn {
+    background-color: #0e7490;
+}
+QPushButton#start_services_btn:hover {
+    background-color: #0891b2;
+}
+QPushButton#start_services_btn:pressed {
+    background-color: #155e75;
+}
 QHeaderView::section {
     background-color: #141c2e;
     color: #6a9fd8;

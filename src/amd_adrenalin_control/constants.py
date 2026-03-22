@@ -17,13 +17,6 @@ COMPANION_NAMES: frozenset[str] = frozenset({
     'amd3dvcacheuser.exe',
 })
 
-SERVICE_NAMES: frozenset[str] = frozenset({
-    'atiesrxx.exe',
-    'amdfendrsr.exe',
-    'amd3dvcachesvc.exe',
-    'amdppkgsvc.exe',
-})
-
 # Maps service executable names to their Windows service names.
 SERVICE_REGISTRY: dict[str, str] = {
     'atiesrxx.exe': 'AMD External Events Utility',
@@ -31,6 +24,11 @@ SERVICE_REGISTRY: dict[str, str] = {
     'amd3dvcachesvc.exe': 'amd3dvcacheSvc',
     'amdppkgsvc.exe': 'AmdPpkgSvc',
 }
+
+SERVICE_NAMES: frozenset[str] = frozenset(SERVICE_REGISTRY)
+
+# Union of companion + service names for fast membership filtering.
+TRACKED_PROCESS_NAMES: frozenset[str] = COMPANION_NAMES | SERVICE_NAMES
 
 PROCESS_TOOLTIPS: dict[str, str] = {
     # pylint: disable=line-too-long
@@ -106,3 +104,28 @@ STATUS_COLORS: dict[str, str] = {
     'stopped': '#f97316',
     'zombie': '#ef4444',
 }
+
+NAME_COLUMN_INDEX = 0
+PATH_COLUMN_INDEX = 1
+STATUS_COLUMN_INDEX = 5
+EVEN_ROW_REMAINDER = 0
+COLUMN_HEADERS: list[str] = ['Name', 'Path', 'PID', 'CPU %', 'Memory', 'Status']
+PATH_UNAVAILABLE = 'Executable path unavailable'
+INVALID_PATH_VALUES: frozenset[str] = frozenset({'-', '', PATH_UNAVAILABLE})
+
+# Service operation detail strings returned by start/stop helpers.
+SVC_DETAIL_ALREADY_RUNNING = 'already running'
+SVC_DETAIL_ALREADY_STOPPED = 'already stopped'
+SVC_DETAIL_ACCESS_DENIED = 'access denied'
+SVC_DETAIL_STARTED = 'started'
+SVC_DETAIL_START_PENDING = 'start pending'
+SVC_DETAIL_STOPPED = 'stopped'
+SVC_DETAIL_STOP_PENDING = 'stop pending'
+
+# Process signal outcome tokens used by _signal_process / terminate_process_tree.
+SIGNAL_OK = 'ok'
+SIGNAL_GONE = 'gone'
+SIGNAL_DENIED = 'denied'
+
+# Windows kernel/system PIDs — used to detect root of process tree.
+SYSTEM_PIDS: frozenset[int] = frozenset({0, 4})

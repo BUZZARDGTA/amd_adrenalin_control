@@ -33,7 +33,7 @@ from ._actions import ActionsMixin, RefreshState
 from ._context_menus import ContextMenuMixin
 from ._stylesheet import MAIN_STYLESHEET
 from ._tree_helpers import ManagedTreeUiState, TreeDisplayMixin, TreeUiStates
-from .constants import RADEON_SOFTWARE_PATH
+from .constants import COLUMN_HEADERS, PATH_COLUMN_INDEX, RADEON_SOFTWARE_PATH
 from .refresh_snapshot import RefreshBridge
 from .ui_helpers import copy_selected_cells
 
@@ -82,10 +82,11 @@ class MainWindow(  # pylint: disable=too-many-ancestors
         _badge.setObjectName('badge_stopped')
         self._status = _StatusWidgets(label=_label, badge=_badge)
 
-        managed_pair = self._create_managed_section(
+        managed_pair = self._create_process_section(
             self,
             'Radeon Software Managed',
             'Main RadeonSoftware.exe process and any child processes spawned from it.',
+            configure_interactions=self._configure_managed_tree_interactions,
         )
         companion_pair = self._create_process_section(
             self,
@@ -372,21 +373,10 @@ class MainWindow(  # pylint: disable=too-many-ancestors
 
     def _configure_process_tree_interactions(self, tree: QTreeWidget) -> None:
         """Enable selection, copy, and context menu on a process tree."""
-        self._configure_common_view_interactions(tree)
-        _ctx_signal = tree.customContextMenuRequested
-
         def _on_ctx_menu(pos: QPoint, t: QTreeWidget = tree) -> None:
             self.show_tree_context_menu(t, pos)
 
-        def _on_expand(_idx: QModelIndex, t: QTreeWidget = tree) -> None:
-            self._resize_tree_widget(t)
-
-        def _on_collapse(_idx: QModelIndex, t: QTreeWidget = tree) -> None:
-            self._resize_tree_widget(t)
-
-        _ctx_signal.connect(_on_ctx_menu)  # pyright: ignore[reportUnknownMemberType]
-        tree.expanded.connect(_on_expand)  # pyright: ignore[reportUnknownMemberType]
-        tree.collapsed.connect(_on_collapse)  # pyright: ignore[reportUnknownMemberType]
+        self._configure_tree_with_resize(tree, _on_ctx_menu)
 
     def _enforce_single_table_selection(
         self,
@@ -412,6 +402,7 @@ class MainWindow(  # pylint: disable=too-many-ancestors
         parent: QWidget,
         title: str,
         description: str,
+        configure_interactions: Callable[[QTreeWidget], None] | None = None,
     ) -> tuple[QWidget, QTreeWidget]:
         """Create a labeled process section with a dedicated tree widget."""
         section = QWidget(parent)
@@ -437,9 +428,9 @@ class MainWindow(  # pylint: disable=too-many-ancestors
 
         tree = QTreeWidget(section)
         tree.setObjectName('process_tree')
-        tree.setColumnCount(6)
+        tree.setColumnCount(len(COLUMN_HEADERS))
         tree.setHeaderLabels(  # pyright: ignore[reportUnknownMemberType]
-            ['Name', 'Path', 'PID', 'CPU %', 'Memory', 'Status'],
+            COLUMN_HEADERS,
         )
         if header := tree.header():
             self._configure_section_header_resize(header)
@@ -447,66 +438,10 @@ class MainWindow(  # pylint: disable=too-many-ancestors
         tree.setIndentation(20)
         tree.setUniformRowHeights(True)
         tree.setAnimated(False)
-        self._configure_process_tree_interactions(tree)
-        tree.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        tree.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-
-        header_row = QWidget(section)
-        header_row_layout = QHBoxLayout(header_row)
-        header_row_layout.setContentsMargins(0, 0, 0, 0)
-        header_row_layout.setSpacing(6)
-        header_row_layout.addStretch()
-        header_row_layout.addWidget(label)
-        header_row_layout.addWidget(count_label)
-        header_row_layout.addStretch()
-
-        section_layout.addWidget(header_row)
-        section_layout.addWidget(description_label)
-        section_layout.addWidget(tree)
-        return section, tree
-
-    def _create_managed_section(
-        self,
-        parent: QWidget,
-        title: str,
-        description: str,
-    ) -> tuple[QWidget, QTreeWidget]:
-        """Create the managed process section with a tree widget for hierarchy."""
-        section = QWidget(parent)
-        section.setObjectName('process_section')
-        section.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
-
-        section_layout = QVBoxLayout(section)
-        section_layout.setContentsMargins(12, 12, 12, 12)
-        section_layout.setSpacing(8)
-
-        label = QLabel(title, section)
-        label.setObjectName('section_header')
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        count_label = QLabel('(0)', section)
-        count_label.setObjectName('section_count')
-        count_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        description_label = QLabel(description, section)
-        description_label.setObjectName('section_description')
-        description_label.setWordWrap(True)
-        description_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        tree = QTreeWidget(section)
-        tree.setObjectName('process_tree')
-        tree.setColumnCount(6)
-        tree.setHeaderLabels(  # pyright: ignore[reportUnknownMemberType]
-            ['Name', 'Path', 'PID', 'CPU %', 'Memory', 'Status'],
-        )
-        if header := tree.header():
-            self._configure_section_header_resize(header)
-        tree.setRootIsDecorated(True)
-        tree.setIndentation(20)
-        tree.setUniformRowHeights(True)
-        tree.setAnimated(False)
-        self._configure_managed_tree_interactions(tree)
+        if configure_interactions is not None:
+            configure_interactions(tree)
+        else:
+            self._configure_process_tree_interactions(tree)
         tree.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         tree.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -527,26 +462,34 @@ class MainWindow(  # pylint: disable=too-many-ancestors
 
     def _configure_managed_tree_interactions(self, tree: QTreeWidget) -> None:
         """Enable selection, copy, expand/collapse and context menu on the tree."""
-        self._configure_common_view_interactions(tree)
-        _ctx_signal = tree.customContextMenuRequested
-        _ctx_signal.connect(  # pyright: ignore[reportUnknownMemberType]
-            self.show_managed_tree_context_menu,
+        self._configure_tree_with_resize(
+            tree, self.show_managed_tree_context_menu,
         )
 
-        def _on_managed_expand(_idx: QModelIndex) -> None:
-            self._resize_managed_tree()
+    def _configure_tree_with_resize(
+        self,
+        tree: QTreeWidget,
+        ctx_menu_handler: Callable[..., None],
+    ) -> None:
+        """Wire common interactions, context menu, and expand/collapse resize."""
+        self._configure_common_view_interactions(tree)
+        _ctx = tree.customContextMenuRequested
+        _ctx.connect(ctx_menu_handler)  # pyright: ignore[reportUnknownMemberType]
 
-        def _on_managed_collapse(_idx: QModelIndex) -> None:
-            self._resize_managed_tree()
+        def _on_resize(_idx: QModelIndex, t: QTreeWidget = tree) -> None:
+            self._resize_tree_widget(t)
 
-        tree.expanded.connect(_on_managed_expand)  # pyright: ignore[reportUnknownMemberType]
-        tree.collapsed.connect(_on_managed_collapse)  # pyright: ignore[reportUnknownMemberType]
+        tree.expanded.connect(_on_resize)  # pyright: ignore[reportUnknownMemberType]
+        tree.collapsed.connect(_on_resize)  # pyright: ignore[reportUnknownMemberType]
 
     @staticmethod
     def _configure_section_header_resize(header: QHeaderView) -> None:
         """Set standard column resize modes for process section headers."""
         header.setStretchLastSection(False)
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        for col in (2, 3, 4, 5):
-            header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        for col in range(header.count()):
+            mode = (
+                QHeaderView.ResizeMode.Stretch
+                if col == PATH_COLUMN_INDEX
+                else QHeaderView.ResizeMode.ResizeToContents
+            )
+            header.setSectionResizeMode(col, mode)

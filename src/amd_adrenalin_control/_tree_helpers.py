@@ -12,15 +12,16 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .constants import PROCESS_TOOLTIPS, STATUS_COLORS
+from .constants import (
+    EVEN_ROW_REMAINDER,
+    NAME_COLUMN_INDEX,
+    PATH_COLUMN_INDEX,
+    PROCESS_TOOLTIPS,
+    STATUS_COLORS,
+    STATUS_COLUMN_INDEX,
+)
 from .refresh_snapshot import RowSnapshot
 from .ui_helpers import COPY_TEXT_ROLE
-
-PATH_COLUMN_INDEX = 1
-PID_COLUMN_INDEX = 2
-STATUS_COLUMN_INDEX = 5
-NAME_COLUMN_INDEX = 0
-EVEN_ROW_REMAINDER = 0
 
 _COLOR_ROW_EVEN = QColor('#111827')
 _COLOR_ROW_ODD = QColor('#0d1220')
@@ -39,7 +40,7 @@ _ALIGNS = (
     Qt.AlignmentFlag.AlignCenter,
 )
 
-_EMPTY_VALUES = ('No active processes', '-', '-', '-', '-', 'idle')
+_EMPTY_VALUES = ('No active processes', '-', '-', '-', '-', '-')
 _EMPTY_ALIGNS = (
     Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
     Qt.AlignmentFlag.AlignCenter,
@@ -114,7 +115,12 @@ class TreeDisplayMixin:
         """Fit a tree widget to its visible items so sections stay compact."""
         header = tree.header()
         header_height = header.height() if header is not None else 0
-        row_height = 28
+        sample = tree.topLevelItem(0)
+        row_height = (
+            tree.visualItemRect(sample).height()
+            if sample is not None
+            else 0
+        ) or 28
         frame_height = tree.frameWidth() * 2
 
         visible_count = 0
@@ -127,11 +133,6 @@ class TreeDisplayMixin:
         tree.setFixedHeight(
             header_height + (visible_count * row_height) + frame_height,
         )
-
-    def _resize_managed_tree(self: TreeDisplayMixin) -> None:
-        """Fit the managed tree to its visible items so sections stay compact."""
-        tree = self.managed_tree
-        self._resize_tree_widget(tree)
 
     def _configure_managed_tree_item_columns(
         self: TreeDisplayMixin,
@@ -171,29 +172,26 @@ class TreeDisplayMixin:
                     _STATUS_QCOLORS.get(status, _COLOR_MUTED),
                 )
 
-    def _populate_process_tree(
+    def _build_hierarchical_tree_items(
         self: TreeDisplayMixin,
         tree: QTreeWidget,
         rows: list[RowSnapshot],
     ) -> None:
-        """Populate a process tree widget from plain row snapshots."""
-        tree.setUpdatesEnabled(False)
-        tree.clear()
-
+        """Build QTreeWidgetItems from row snapshots using indent for nesting."""
+        parent_stack: list[QTreeWidgetItem] = []
         for row_idx, row in enumerate(rows):
             row_bg = (
                 _COLOR_ROW_EVEN
                 if row_idx % 2 == EVEN_ROW_REMAINDER
                 else _COLOR_ROW_ODD
             )
-
-            tree_item = QTreeWidgetItem(tree)
-            self._configure_managed_tree_item_columns(
-                tree_item, row_bg, row,
-            )
-
-        self._resize_tree_widget(tree)
-        tree.setUpdatesEnabled(True)
+            del parent_stack[row['indent']:]
+            if parent_stack:
+                tree_item = QTreeWidgetItem(parent_stack[-1])
+            else:
+                tree_item = QTreeWidgetItem(tree)
+            parent_stack.append(tree_item)
+            self._configure_managed_tree_item_columns(tree_item, row_bg, row)
 
     @staticmethod
     def _update_section_count(section: QWidget, count: int) -> None:
@@ -222,6 +220,28 @@ class TreeDisplayMixin:
 
     # -- Section updates -----------------------------------------------
 
+    def _update_tree_section(
+        self: TreeDisplayMixin,
+        section: QWidget,
+        tree: QTreeWidget,
+        state: ManagedTreeUiState,
+        processes: list[RowSnapshot],
+    ) -> None:
+        """Update a section with process rows or an empty-state placeholder."""
+        section.setVisible(True)
+        self._update_section_count(section, len(processes))
+        if not processes:
+            self._populate_empty_row(tree)
+            self._resize_tree_widget(tree)
+            return
+        self._save_tree_ui(tree, state)
+        tree.setUpdatesEnabled(False)
+        tree.clear()
+        self._build_hierarchical_tree_items(tree, processes)
+        self._restore_tree_ui(tree, state)
+        self._resize_tree_widget(tree)
+        tree.setUpdatesEnabled(True)
+
     def update_process_section(
         self: TreeDisplayMixin,
         section: QWidget,
@@ -229,212 +249,56 @@ class TreeDisplayMixin:
         processes: list[RowSnapshot],
     ) -> None:
         """Keep section visible and show either process rows or an empty-state row."""
-        section.setVisible(True)
-        self._update_section_count(section, len(processes))
-        if not processes:
-            self._populate_empty_row(tree)
-            self._resize_tree_widget(tree)
-            return
-        is_service = tree is self.service_tree
-        if is_service:
-            svc_state = self._tree_ui.service
-            self._save_flat_tree_selection(
-                tree, svc_state,
-            )
-            tree.setUpdatesEnabled(False)
-            tree.clear()
-            for row_idx, row in enumerate(processes):
-                row_bg = (
-                    _COLOR_ROW_EVEN
-                    if row_idx % 2 == EVEN_ROW_REMAINDER
-                    else _COLOR_ROW_ODD
-                )
-                tree_item = QTreeWidgetItem(tree)
-                self._configure_managed_tree_item_columns(
-                    tree_item, row_bg, row,
-                )
-            self._restore_flat_tree_selection(
-                tree, svc_state,
-            )
-            self._resize_tree_widget(tree)
-            tree.setUpdatesEnabled(True)
-        else:
-            self._populate_process_tree(tree, processes)
+        self._update_tree_section(
+            section, tree, self._tree_ui.service, processes,
+        )
 
     def update_companion_section(
         self: TreeDisplayMixin,
         processes: list[RowSnapshot],
     ) -> None:
         """Update companion section with tree hierarchy like the managed section."""
-        section = self.companion_section
-        tree = self.companion_tree
-        section.setVisible(True)
-        self._update_section_count(section, len(processes))
-        if not processes:
-            self._populate_empty_row(tree)
-            self._resize_tree_widget(tree)
-            return
-
-        self._save_companion_tree_ui(tree)
-
-        tree.setUpdatesEnabled(False)
-        tree.clear()
-        parent_stack: list[QTreeWidgetItem] = []
-
-        for row_idx, row in enumerate(processes):
-            indent = row['indent']
-
-            row_bg = (
-                _COLOR_ROW_EVEN
-                if row_idx % 2 == EVEN_ROW_REMAINDER
-                else _COLOR_ROW_ODD
-            )
-
-            del parent_stack[indent:]
-
-            if parent_stack:
-                tree_item = QTreeWidgetItem(parent_stack[-1])
-            else:
-                tree_item = QTreeWidgetItem(tree)
-
-            parent_stack.append(tree_item)
-
-            self._configure_managed_tree_item_columns(
-                tree_item, row_bg, row,
-            )
-
-        self._restore_companion_tree_ui(tree)
-        self._resize_tree_widget(tree)
-        tree.setUpdatesEnabled(True)
-
-    def _populate_managed_tree(
-        self: TreeDisplayMixin,
-        rows: list[RowSnapshot],
-    ) -> None:
-        """Populate the managed tree widget from plain row snapshots."""
-        tree = self.managed_tree
-        self._save_managed_tree_expansion()
-        self._save_managed_tree_selection()
-
-        tree.setUpdatesEnabled(False)
-        tree.clear()
-
-        # Stack tracks the tree item at each depth so children
-        # attach under the correct parent at any nesting level.
-        parent_stack: list[QTreeWidgetItem] = []
-
-        for row_idx, row in enumerate(rows):
-            indent = row['indent']
-
-            row_bg = (
-                _COLOR_ROW_EVEN
-                if row_idx % 2 == EVEN_ROW_REMAINDER
-                else _COLOR_ROW_ODD
-            )
-
-            # Trim the stack back to the current indent depth.
-            del parent_stack[indent:]
-
-            if parent_stack:
-                tree_item = QTreeWidgetItem(parent_stack[-1])
-            else:
-                tree_item = QTreeWidgetItem(tree)
-
-            parent_stack.append(tree_item)
-
-            self._configure_managed_tree_item_columns(
-                tree_item, row_bg, row,
-            )
-
-        self._restore_managed_tree_expansion()
-        self._restore_managed_tree_selection()
-        self._resize_managed_tree()
-        tree.setUpdatesEnabled(True)
+        self._update_tree_section(
+            self.companion_section,
+            self.companion_tree,
+            self._tree_ui.companion,
+            processes,
+        )
 
     def update_managed_section(
         self: TreeDisplayMixin,
         processes: list[RowSnapshot],
     ) -> None:
         """Update the managed tree section with process data or an empty state."""
-        section = self.managed_section
-        section.setVisible(True)
-        self._update_section_count(section, len(processes))
-        if not processes:
-            tree = self.managed_tree
-            self._populate_empty_row(tree)
-            self._resize_managed_tree()
-            return
-        self._populate_managed_tree(processes)
+        self._update_tree_section(
+            self.managed_section,
+            self.managed_tree,
+            self._tree_ui.managed,
+            processes,
+        )
 
     # -- Tree UI state persistence -------------------------------------
 
-    @staticmethod
-    def _save_flat_tree_selection(
+    def _save_tree_ui(
+        self: TreeDisplayMixin,
         tree: QTreeWidget,
         state: ManagedTreeUiState,
     ) -> None:
-        """Save selected cells for a flat (non-hierarchical) tree."""
-        state.selected_cells.clear()
-        sel_model = tree.selectionModel()
-        if sel_model is None:
-            return
-        for i in range(tree.topLevelItemCount()):
-            item = tree.topLevelItem(i)
-            if item is None:
-                continue
-            pid = item.data(
-                NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole,
-            )
-            if not isinstance(pid, int):
-                continue
-            for col in range(tree.columnCount()):
-                idx = tree.indexFromItem(item, col)
-                if sel_model.isSelected(idx):
-                    state.selected_cells.setdefault(pid, set()).add(col)
-
-    @staticmethod
-    def _restore_flat_tree_selection(
-        tree: QTreeWidget,
-        state: ManagedTreeUiState,
-    ) -> None:
-        """Restore selected cells for a flat (non-hierarchical) tree."""
-        if not state.selected_cells:
-            return
-        sel_model = tree.selectionModel()
-        if sel_model is None:
-            return
-        for i in range(tree.topLevelItemCount()):
-            item = tree.topLevelItem(i)
-            if item is None:
-                continue
-            pid = item.data(
-                NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole,
-            )
-            if not isinstance(pid, int):
-                continue
-            cols = state.selected_cells.get(pid)
-            if cols is None:
-                continue
-            for col in cols:
-                idx = tree.indexFromItem(item, col)
-                sel_model.select(
-                    idx,
-                    QItemSelectionModel.SelectionFlag.Select,
-                )
-
-    def _save_companion_tree_ui(self: TreeDisplayMixin, tree: QTreeWidget) -> None:
-        """Persist expansion and selection state for the companion tree."""
-        state = self._tree_ui.companion
+        """Persist expansion and selection state for a hierarchical tree."""
         state.expanded.clear()
         state.selected_cells.clear()
+        sel_model = tree.selectionModel()
         for i in range(tree.topLevelItemCount()):
             top = tree.topLevelItem(i)
             if top is not None:
-                self._save_tree_ui_recursive(state, tree, top)
+                self._save_tree_ui_recursive(state, tree, sel_model, top)
 
-    def _restore_companion_tree_ui(self: TreeDisplayMixin, tree: QTreeWidget) -> None:
-        """Restore expansion and selection state for the companion tree."""
-        state = self._tree_ui.companion
+    def _restore_tree_ui(
+        self: TreeDisplayMixin,
+        tree: QTreeWidget,
+        state: ManagedTreeUiState,
+    ) -> None:
+        """Restore expansion and selection state for a hierarchical tree."""
         sel_model = tree.selectionModel()
         for i in range(tree.topLevelItemCount()):
             top = tree.topLevelItem(i)
@@ -447,6 +311,7 @@ class TreeDisplayMixin:
         self: TreeDisplayMixin,
         state: ManagedTreeUiState,
         tree: QTreeWidget,
+        sel_model: QItemSelectionModel | None,
         item: QTreeWidgetItem,
     ) -> None:
         """Recursively save expansion and selection into a state object."""
@@ -455,7 +320,6 @@ class TreeDisplayMixin:
         )
         if isinstance(pid, int):
             state.expanded[pid] = item.isExpanded()
-            sel_model = tree.selectionModel()
             if sel_model is not None:
                 for col in range(tree.columnCount()):
                     idx = tree.indexFromItem(item, col)
@@ -466,7 +330,9 @@ class TreeDisplayMixin:
         for i in range(item.childCount()):
             child = item.child(i)
             if child is not None:
-                self._save_tree_ui_recursive(state, tree, child)
+                self._save_tree_ui_recursive(
+                    state, tree, sel_model, child,
+                )
 
     def _restore_tree_ui_recursive(
         self: TreeDisplayMixin,
@@ -500,114 +366,3 @@ class TreeDisplayMixin:
                 self._restore_tree_ui_recursive(
                     state, tree, sel_model, child,
                 )
-
-    def _save_item_expansion_recursive(
-        self: TreeDisplayMixin,
-        item: QTreeWidgetItem,
-    ) -> None:
-        """Recursively persist expansion state for an item and its children."""
-        managed = self._tree_ui.managed
-        pid = item.data(NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole)
-        if isinstance(pid, int):
-            managed.expanded[pid] = item.isExpanded()
-        for i in range(item.childCount()):
-            child = item.child(i)
-            if child is not None:
-                self._save_item_expansion_recursive(child)
-
-    def _save_managed_tree_expansion(self: TreeDisplayMixin) -> None:
-        """Persist which tree items are currently expanded."""
-        tree = self.managed_tree
-        for i in range(tree.topLevelItemCount()):
-            top_item = tree.topLevelItem(i)
-            if top_item is not None:
-                self._save_item_expansion_recursive(top_item)
-
-    def _restore_item_expansion_recursive(
-        self: TreeDisplayMixin,
-        item: QTreeWidgetItem,
-    ) -> None:
-        """Recursively re-apply saved expansion state for an item and children."""
-        managed = self._tree_ui.managed
-        pid = item.data(NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole)
-        expanded = (
-            managed.expanded.get(pid, True)
-            if isinstance(pid, int)
-            else True
-        )
-        item.setExpanded(expanded)
-        for i in range(item.childCount()):
-            child = item.child(i)
-            if child is not None:
-                self._restore_item_expansion_recursive(child)
-
-    def _restore_managed_tree_expansion(self: TreeDisplayMixin) -> None:
-        """Re-apply saved expansion state to all tree items."""
-        tree = self.managed_tree
-        for i in range(tree.topLevelItemCount()):
-            top_item = tree.topLevelItem(i)
-            if top_item is not None:
-                self._restore_item_expansion_recursive(top_item)
-
-    def _save_managed_tree_selection(self: TreeDisplayMixin) -> None:
-        """Persist which tree cells are selected, keyed by PID -> columns."""
-        tree = self.managed_tree
-        managed = self._tree_ui.managed
-        managed.selected_cells = {}
-        sel_model = tree.selectionModel()
-        if sel_model is None:
-            return
-        for index in sel_model.selectedIndexes():
-            item = tree.itemFromIndex(index)
-            if item is None:
-                continue
-            pid = item.data(NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole)
-            if isinstance(pid, int):
-                managed.selected_cells.setdefault(
-                    pid, set(),
-                ).add(index.column())
-
-    def _restore_selection_recursive(
-        self: TreeDisplayMixin,
-        tree: QTreeWidget,
-        sel_model: QItemSelectionModel,
-        item: QTreeWidgetItem,
-    ) -> None:
-        """Recursively restore cell selection for an item and its children."""
-        self._restore_item_cell_selection(tree, sel_model, item)
-        for i in range(item.childCount()):
-            child = item.child(i)
-            if child is not None:
-                self._restore_selection_recursive(tree, sel_model, child)
-
-    def _restore_managed_tree_selection(self: TreeDisplayMixin) -> None:
-        """Re-apply saved per-cell selection to tree items matching saved PIDs."""
-        managed = self._tree_ui.managed
-        if not managed.selected_cells:
-            return
-        tree = self.managed_tree
-        sel_model = tree.selectionModel()
-        if sel_model is None:
-            return
-        for i in range(tree.topLevelItemCount()):
-            top_item = tree.topLevelItem(i)
-            if top_item is not None:
-                self._restore_selection_recursive(tree, sel_model, top_item)
-
-    def _restore_item_cell_selection(
-        self: TreeDisplayMixin,
-        tree: QTreeWidget,
-        sel_model: QItemSelectionModel,
-        item: QTreeWidgetItem,
-    ) -> None:
-        """Select saved columns for a single tree item if its PID was saved."""
-        managed = self._tree_ui.managed
-        pid = item.data(NAME_COLUMN_INDEX, Qt.ItemDataRole.UserRole)
-        if not isinstance(pid, int):
-            return
-        cols = managed.selected_cells.get(pid)
-        if cols is None:
-            return
-        for col in cols:
-            idx = tree.indexFromItem(item, col)
-            sel_model.select(idx, QItemSelectionModel.SelectionFlag.Select)
